@@ -6,17 +6,34 @@ This release contains pre-compiled binary files ready to flash to your ESP32-C3 
 
 ## What's Included
 
-### Single File (Recommended)
-- `firmware-complete.bin` - Complete firmware (1 MB) - **Flash this for easiest setup!**
-
-### Separate Files (Advanced)
-- `bootloader.bin` - ESP32-C3 bootloader
-- `partitions.bin` - Partition table
-- `firmware.bin` - Main application firmware
+- `firmware-complete.bin` - Complete firmware (1 MB) - **Flash this single file!**
+- `flash.bat` / `flash.sh` - Automated flash scripts
+- `FLASH_INSTRUCTIONS.md` - This file
 
 ## Flashing Instructions
 
-### Method 1: Using esptool.py (Recommended)
+### Method 1: Web-Based Flasher (Easiest - No Installation Required!)
+
+**This is the recommended method for most users!**
+
+Visit **[ESP Web Flasher](https://espressif.github.io/esptool-js/)** and follow these steps:
+
+1. **Connect ESP32-C3** to your computer via USB
+2. Click **"Connect"** button
+3. Select your ESP32 port from the popup (usually shows as "USB Serial" or similar)
+4. Click **"Choose File"** and select `firmware-complete.bin`
+5. **IMPORTANT:** Change **Flash Address** to `0x0` (default may be different)
+6. Click **"Program"** button
+7. Wait ~30 seconds for flashing to complete
+8. You should see "Flash complete!" message
+
+**Advantages:**
+- No software installation required
+- Works in Chrome, Edge, or Opera browsers
+- Simple and beginner-friendly
+- Cross-platform (Windows, Mac, Linux)
+
+### Method 2: Using esptool.py (Command Line)
 
 #### Prerequisites
 Install esptool:
@@ -24,16 +41,11 @@ Install esptool:
 pip install esptool
 ```
 
-#### Flash Command - Single File (Easiest!)
+#### Flash Command
 Connect your ESP32-C3 via USB and run:
 
 ```bash
 esptool.py --chip esp32c3 --port COM3 --baud 460800 write_flash 0x0 firmware-complete.bin
-```
-
-#### Alternative - Separate Files (Advanced)
-```bash
-esptool.py --chip esp32c3 --port COM3 --baud 460800 write_flash -z 0x0 bootloader.bin 0x8000 partitions.bin 0x10000 firmware.bin
 ```
 
 **Important:** Replace `COM3` with your actual port:
@@ -45,27 +57,14 @@ To find your port:
 - **Linux**: `ls /dev/tty*`
 - **Mac**: `ls /dev/cu.*`
 
-### Method 2: Using ESP32 Flash Download Tool (Windows)
+### Method 3: Using ESP32 Flash Download Tool (Windows Only)
 
 1. Download [Flash Download Tool](https://www.espressif.com/en/support/download/other-tools)
 2. Run the tool and select **ESP32-C3**
-3. **Option A - Single File (Easiest):**
-   - `firmware-complete.bin` at address `0x0`
-4. **Option B - Separate Files:**
-   - `bootloader.bin` at address `0x0`
-   - `partitions.bin` at address `0x8000`
-   - `firmware.bin` at address `0x10000`
-5. Select your COM port
-6. Set baud rate to 460800
-7. Click **START**
-
-### Method 3: Web-Based Flasher (No Installation Required!)
-
-Visit [ESP Tool Online](https://espressif.github.io/esptool-js/) and:
-1. Connect ESP32-C3 via USB
-2. Click "Connect" and select your port
-3. Add file: `firmware-complete.bin` at offset `0x0`
-4. Click "Program"
+3. Add `firmware-complete.bin` at address `0x0`
+4. Select your COM port
+5. Set baud rate to 460800
+6. Click **START**
 
 ## After Flashing
 
@@ -83,8 +82,15 @@ Once connected, access the ESP32's IP address in a browser to configure:
 - Timezone settings
 - Time format (12/24 hour)
 - Date format
+- Display labels (PUMP, FAN, etc.)
 
 ## Troubleshooting
+
+**Web Flasher Issues:**
+- **Port not detected**: Make sure you're using Chrome, Edge, or Opera (Firefox and Safari don't support Web Serial API)
+- **Connection failed**: Try a different USB cable (must support data transfer)
+- **Flash address not 0x0**: Double-check flash address is set to `0x0` (zero)
+- **Still not working**: Try the automated script or command-line method below
 
 **Can't find COM port:**
 - Install [CH340 drivers](https://learn.sparkfun.com/tutorials/how-to-install-ch340-drivers) if needed
