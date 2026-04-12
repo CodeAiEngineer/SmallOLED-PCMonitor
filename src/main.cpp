@@ -445,10 +445,11 @@ void loop() {
       display.display();
     } else {
       // Check if we should show weather (5 seconds every 60 seconds)
-      if (weatherShowing) {
-        drawWeather();
-      } else if (shouldShowWeather()) {
+      if (shouldShowWeather() && !weatherShowing) {
         startWeatherDisplay();
+      }
+      
+      if (weatherShowing) {
         drawWeather();
       } else {
   #if TOUCH_BUTTON_ENABLED

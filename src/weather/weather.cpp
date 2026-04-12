@@ -2,7 +2,7 @@
  * SmallOLED-PCMonitor - Weather Module Implementation
  *
  * Fetches weather data from wttr.in for Izmir Konak.
- * Displays temperature for 3 seconds every 60 seconds.
+ * Displays temperature for 5 seconds every 60 seconds.
  */
 
 #include "weather.h"
@@ -16,11 +16,15 @@ String weatherTemp = "";
 unsigned long lastWeatherUpdate = 0;
 unsigned long weatherDisplayStart = 0;
 bool weatherShowing = false;
+unsigned long weatherShowTimer = 0;  // Timer for tracking show cycle
+bool weatherShownThisCycle = false;   // Track if we've shown weather in current cycle
 
 void initWeather() {
-  lastWeatherUpdate = millis();
+  lastWeatherUpdate = 0;  // Force immediate update
   weatherAvailable = false;
   weatherShowing = false;
+  weatherShowTimer = 0;
+  weatherShownThisCycle = false;
   Serial.println("Weather module initialized");
 }
 
@@ -31,11 +35,14 @@ void updateWeather() {
   }
 
   unsigned long currentMillis = millis();
+  
+  // Fetch weather every 60 seconds
   if (currentMillis - lastWeatherUpdate < WEATHER_UPDATE_INTERVAL) {
     return;  // Not time yet
   }
 
   lastWeatherUpdate = currentMillis;
+  weatherShownThisCycle = false;  // Reset cycle flag
 
   HTTPClient http;
   http.begin(WEATHER_API_URL);
@@ -66,11 +73,16 @@ void updateWeather() {
 bool shouldShowWeather() {
   // Don't show if weather not available
   if (!weatherAvailable || weatherTemp.length() == 0) return false;
+  
+  // Don't show if already showing
+  if (weatherShowing) return false;
+  
+  // Don't show if already shown this cycle
+  if (weatherShownThisCycle) return false;
 
-  // Check if it's time to show weather (every 60 seconds after update)
+  // Show weather 2 seconds after each weather fetch, for 5 seconds
   unsigned long sinceLastUpdate = millis() - lastWeatherUpdate;
-  if (sinceLastUpdate > WEATHER_UPDATE_INTERVAL + 2000) {
-    // Give a 2 second grace period after update before showing
+  if (sinceLastUpdate >= 2000) {
     return true;
   }
 
@@ -81,7 +93,8 @@ void startWeatherDisplay() {
   if (shouldShowWeather() && !weatherShowing) {
     weatherShowing = true;
     weatherDisplayStart = millis();
-    Serial.println("Weather display started");
+    weatherShownThisCycle = true;  // Mark as shown for this cycle
+    Serial.printf("Weather display started - showing for 5 seconds: %s\n", weatherTemp.c_str());
   }
 }
 
@@ -92,9 +105,11 @@ void stopWeatherDisplay() {
 void drawWeather() {
   if (!weatherShowing || !displayAvailable) return;
 
-  // Check if display duration exceeded
-  if (millis() - weatherDisplayStart > WEATHER_DISPLAY_DURATION) {
+  // Check if display duration exceeded (5 seconds)
+  unsigned long elapsed = millis() - weatherDisplayStart;
+  if (elapsed > WEATHER_DISPLAY_DURATION) {
     weatherShowing = false;
+    Serial.println("Weather display finished");
     return;
   }
 
