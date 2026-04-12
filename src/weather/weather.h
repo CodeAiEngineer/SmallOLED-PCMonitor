@@ -2,7 +2,7 @@
  * SmallOLED-PCMonitor - Weather Module
  *
  * Fetches weather data from wttr.in for Izmir Konak.
- * Displays temperature for 3 seconds every 60 seconds.
+ * Displays temperature + icon for 5 seconds every 60 seconds.
  */
 
 #ifndef WEATHER_H
@@ -17,15 +17,14 @@
 // Weather display duration (5 seconds)
 #define WEATHER_DISPLAY_DURATION 5000
 
-// Weather API URL (wttr.in - no API key needed)
-// %t = temperature, %c = weather icon (Unicode), %C = weather description
+// Weather API URLs (wttr.in - no API key needed)
 #define WEATHER_API_URL_TEMP "http://wttr.in/Izmir,Konak?format=%t&lang=tr"
 #define WEATHER_API_URL_DESC "http://wttr.in/Izmir,Konak?format=%C&lang=tr"
 
 // Weather state
 extern bool weatherAvailable;
 extern String weatherTemp;
-extern String weatherDesc;  // Weather description (e.g., "Sunny", "Rain")
+extern String weatherDesc;
 extern unsigned long lastWeatherUpdate;
 extern unsigned long weatherDisplayStart;
 extern bool weatherShowing;
@@ -33,7 +32,7 @@ extern bool weatherShowing;
 // Initialize weather module
 void initWeather();
 
-// Fetch weather data (non-blocking)
+// Fetch weather data (state machine)
 void updateWeather();
 
 // Check if we should display weather now
