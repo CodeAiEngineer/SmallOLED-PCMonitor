@@ -43,5 +43,7 @@
 bool initDisplay();
 void applyDisplayBrightness();
 void checkScheduledBrightness();
+bool isScreenScheduledOff();
+bool handleGoodnightSequence();
 
 #endif // DISPLAY_H

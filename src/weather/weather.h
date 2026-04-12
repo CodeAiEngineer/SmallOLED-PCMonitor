@@ -14,8 +14,8 @@
 
 // Weather update interval (60 seconds)
 #define WEATHER_UPDATE_INTERVAL 60000
-// Weather display duration (3 seconds)
-#define WEATHER_DISPLAY_DURATION 3000
+// Weather display duration (5 seconds)
+#define WEATHER_DISPLAY_DURATION 5000
 
 // Weather API URL (wttr.in - no API key needed)
 #define WEATHER_API_URL "http://wttr.in/Izmir,Konak?format=%t&lang=tr"

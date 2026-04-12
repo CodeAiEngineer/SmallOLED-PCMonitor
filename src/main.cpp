@@ -350,6 +350,9 @@ void loop() {
   // Check and apply scheduled brightness (time-based dimming)
   checkScheduledBrightness();
 
+  // Update weather data periodically
+  updateWeather();
+
   // Handle web server requests
   server.handleClient();
 
@@ -431,45 +434,64 @@ void loop() {
 
     display.clearDisplay();
 
-#if TOUCH_BUTTON_ENABLED
-    bool showStats = metricData.online && !manualClockMode;
-#else
-    bool showStats = metricData.online;
-#endif
-
-    // Show error status if PC is connected but LHM has issues
-    if (showStats && metricData.status != STATUS_OK && metricData.status != 0) {
-      displayErrorStatus(metricData.status);
-    } else if (showStats) {
-      displayStats();
-    } else {
-      switch (settings.clockStyle) {
-      case 0:
-        displayClockWithMario();
-        break;
-      case 1:
-        displayStandardClock();
-        break;
-      case 2:
-        displayLargeClock();
-        break;
-      case 3:
-      case 4:
-        displayClockWithSpaceInvader();
-        break;
-      case 5:
-        displayClockWithPong();
-        break;
-      case 6:
-        displayClockWithPacman();
-        break;
-      default:
-        displayStandardClock();
-        break;
-      }
+    // First check if goodnight sequence is running (23:50 weekdays)
+    if (handleGoodnightSequence()) {
+      // Goodnight sequence is running, it handles its own display updates
     }
+    // Then check if screen should be off based on schedule
+    else if (isScreenScheduledOff()) {
+      // Screen is scheduled off - clear display and turn off
+      display.clearDisplay();
+      display.display();
+    } else {
+      // Check if we should show weather (5 seconds every 60 seconds)
+      if (weatherShowing) {
+        drawWeather();
+      } else if (shouldShowWeather()) {
+        startWeatherDisplay();
+        drawWeather();
+      } else {
+  #if TOUCH_BUTTON_ENABLED
+        bool showStats = metricData.online && !manualClockMode;
+  #else
+        bool showStats = metricData.online;
+  #endif
 
-    display.display();
+        // Show error status if PC is connected but LHM has issues
+        if (showStats && metricData.status != STATUS_OK && metricData.status != 0) {
+          displayErrorStatus(metricData.status);
+        } else if (showStats) {
+          displayStats();
+        } else {
+          switch (settings.clockStyle) {
+          case 0:
+            displayClockWithMario();
+            break;
+          case 1:
+            displayStandardClock();
+            break;
+          case 2:
+            displayLargeClock();
+            break;
+          case 3:
+          case 4:
+            displayClockWithSpaceInvader();
+            break;
+          case 5:
+            displayClockWithPong();
+            break;
+          case 6:
+            displayClockWithPacman();
+            break;
+          default:
+            displayStandardClock();
+            break;
+          }
+        }
+      }
+
+      display.display();
+    }
   }
 
   // WiFi reconnection handling

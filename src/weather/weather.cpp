@@ -64,13 +64,10 @@ void updateWeather() {
 }
 
 bool shouldShowWeather() {
-  // Don't show weather if PC is online (show stats instead)
-  if (metricData.online) return false;
-
   // Don't show if weather not available
   if (!weatherAvailable || weatherTemp.length() == 0) return false;
 
-  // Check if it's time to show weather
+  // Check if it's time to show weather (every 60 seconds after update)
   unsigned long sinceLastUpdate = millis() - lastWeatherUpdate;
   if (sinceLastUpdate > WEATHER_UPDATE_INTERVAL + 2000) {
     // Give a 2 second grace period after update before showing

@@ -14,6 +14,11 @@ static uint8_t lastAppliedBrightness = 255;
 static unsigned long lastBrightnessCheck = 0;
 const unsigned long BRIGHTNESS_CHECK_INTERVAL = 60000; // Check every minute
 
+// Goodnight animation state tracking
+static bool goodnightShown = false;
+static unsigned long goodnightPhaseStart = 0;
+static int goodnightPhase = 0; // 0=not started, 1=showing text, 2=showing smiley, 3=done
+
 // Initialize display - returns true on success
 bool initDisplay() {
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
@@ -106,4 +111,175 @@ void checkScheduledBrightness() {
 #endif
     lastAppliedBrightness = targetBrightness;
   }
+}
+
+// Check if screen should be off based on schedule (weekdays 23:50-08:00, weekends 01:00-08:00)
+bool isScreenScheduledOff() {
+  // Get current time
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    return false; // Can't get time, assume screen should be on
+  }
+
+  uint8_t currentHour = timeinfo.tm_hour;
+  uint8_t currentMinute = timeinfo.tm_min;
+  uint8_t currentDayOfWeek = timeinfo.tm_wday; // 0=Sunday, 1=Monday, ..., 6=Saturday
+
+  // Convert current time to minutes since midnight for easier comparison
+  uint16_t currentTimeInMinutes = currentHour * 60 + currentMinute;
+
+  // Weekdays (Monday=1 to Friday=5): Screen off from 23:50 to 08:00
+  if (currentDayOfWeek >= 1 && currentDayOfWeek <= 5) {
+    uint16_t weekdayOffStart = 23 * 60 + 50; // 23:50 = 1430 minutes
+    uint16_t weekdayOffEnd = 8 * 60;          // 08:00 = 480 minutes
+    
+    // Handle wrap-around (23:50 to midnight to 08:00)
+    if (currentTimeInMinutes >= weekdayOffStart || currentTimeInMinutes < weekdayOffEnd) {
+      return true;
+    }
+  }
+  
+  // Weekends (Saturday=6, Sunday=0): Screen off from 01:00 to 08:00
+  if (currentDayOfWeek == 0 || currentDayOfWeek == 6) {
+    uint16_t weekendOffStart = 1 * 60;        // 01:00 = 60 minutes
+    uint16_t weekendOffEnd = 8 * 60;          // 08:00 = 480 minutes
+    
+    if (currentTimeInMinutes >= weekendOffStart && currentTimeInMinutes < weekendOffEnd) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// Handle goodnight sequence: "İyi Geceler" for 5s, then smiley for 5s
+// Returns true if sequence is still running, false if done
+bool handleGoodnightSequence() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    return false;
+  }
+
+  uint8_t currentHour = timeinfo.tm_hour;
+  uint8_t currentMinute = timeinfo.tm_min;
+  uint8_t currentDayOfWeek = timeinfo.tm_wday;
+
+  uint16_t currentTimeInMinutes = currentHour * 60 + currentMinute;
+
+  // Check if we're at the goodnight trigger time (23:50 on weekdays)
+  bool shouldTriggerGoodnight = false;
+  if (currentDayOfWeek >= 1 && currentDayOfWeek <= 5) {
+    // Trigger at exactly 23:50-23:59
+    if (currentHour == 23 && currentMinute >= 50) {
+      shouldTriggerGoodnight = true;
+    }
+  }
+
+  // Reset goodnight state if it's a new day (after 08:00)
+  if (currentHour >= 8 && currentHour < 23) {
+    goodnightShown = false;
+    goodnightPhase = 0;
+    return false;
+  }
+
+  // If not trigger time and sequence not started, return
+  if (!shouldTriggerGoodnight && goodnightPhase == 0) {
+    return false;
+  }
+
+  // If we've already shown goodnight and past the time, reset
+  if (goodnightPhase == 3 && currentHour >= 0 && currentHour < 8) {
+    return false; // Already shown, waiting for morning reset
+  }
+
+  // Start goodnight sequence if triggered and not yet shown today
+  if (shouldTriggerGoodnight && !goodnightShown && goodnightPhase == 0) {
+    goodnightPhase = 1;
+    goodnightPhaseStart = millis();
+    goodnightShown = true;
+    Serial.println("Goodnight sequence started");
+  }
+
+  // Process goodnight sequence
+  if (goodnightPhase > 0 && goodnightPhase < 3) {
+    unsigned long elapsed = millis() - goodnightPhaseStart;
+    
+    if (goodnightPhase == 1) {
+      // Phase 1: Show "İyi Geceler" for 5 seconds
+      if (elapsed < 5000) {
+        display.clearDisplay();
+        display.setTextColor(DISPLAY_WHITE);
+        
+        // Draw "İyi Geceler" centered
+        display.setTextSize(2);
+        const char* text = "Iyi Geceler";
+        int16_t x1, y1;
+        uint16_t w, h;
+        display.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+        display.setCursor((SCREEN_WIDTH - w) / 2, 20);
+        display.print(text);
+        
+        // Draw moon icon
+        display.setTextSize(1);
+        display.setCursor(10, 8);
+        display.print("C"); // Moon character
+        
+        display.display();
+        return true; // Still running
+      } else {
+        // Move to phase 2 (smiley)
+        goodnightPhase = 2;
+        goodnightPhaseStart = millis();
+        Serial.println("Goodnight phase 2: Smiley");
+      }
+    }
+    
+    if (goodnightPhase == 2) {
+      // Phase 2: Show smiley face for 5 seconds
+      if (elapsed < 5000) {
+        display.clearDisplay();
+        display.setTextColor(DISPLAY_WHITE);
+        
+        // Draw big smiley face
+        // Circle
+        int centerX = SCREEN_WIDTH / 2;
+        int centerY = SCREEN_HEIGHT / 2;
+        int radius = 24;
+        display.drawCircle(centerX, centerY, radius, DISPLAY_WHITE);
+        
+        // Eyes
+        display.fillCircle(centerX - 8, centerY - 8, 3, DISPLAY_WHITE);
+        display.fillCircle(centerX + 8, centerY - 8, 3, DISPLAY_WHITE);
+        
+        // Smile (arc)
+        display.drawCircle(centerX, centerY - 2, 14, DISPLAY_WHITE);
+        
+        // Draw "Uyku modu" text below
+        display.setTextSize(1);
+        const char* sleepText = "Uyku modu";
+        int16_t x1, y1;
+        uint16_t w, h;
+        display.getTextBounds(sleepText, 0, 0, &x1, &y1, &w, &h);
+        display.setCursor((SCREEN_WIDTH - w) / 2, SCREEN_HEIGHT - 12);
+        display.print(sleepText);
+        
+        display.display();
+        return true; // Still running
+      } else {
+        // Phase 3: Done - screen will turn off
+        goodnightPhase = 3;
+        display.clearDisplay();
+        display.display();
+        Serial.println("Goodnight sequence completed, screen off");
+        return false;
+      }
+    }
+  }
+
+  // If sequence completed
+  if (goodnightPhase == 3) {
+    return false;
+  }
+
+  return false;
 }
