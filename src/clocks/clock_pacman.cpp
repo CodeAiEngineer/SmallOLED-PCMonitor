@@ -202,9 +202,18 @@ void displayClockWithPacman() {
   display.print(dateStr);
 
   // Draw time digits as pellets
+  // 12h/24h format support (v1.5.3)
+  int hour = displayed_hour;
+  bool isPM = false;
+  if (!settings.use24Hour) {
+    isPM = (hour >= 12);
+    if (hour == 0) hour = 12;
+    else if (hour > 12) hour -= 12;
+  }
+  
   uint8_t digitValues[5];
-  digitValues[0] = displayed_hour / 10;
-  digitValues[1] = displayed_hour % 10;
+  digitValues[0] = hour / 10;
+  digitValues[1] = hour % 10;
   digitValues[2] = 10;  // Colon marker (not a digit)
   digitValues[3] = displayed_min / 10;
   digitValues[4] = displayed_min % 10;
@@ -260,6 +269,13 @@ void displayClockWithPacman() {
 
   // Draw Pac-Man
   drawPacman((int)pacman_x, (int)pacman_y, pacman_direction, pacman_mouth_frame);
+  
+  // Draw AM/PM indicator (v1.5.3)
+  if (!settings.use24Hour) {
+    display.setTextSize(1);
+    display.setCursor(115, TIME_Y_PACMAN + 2);
+    display.print(isPM ? "P" : "A");
+  }
 
   // Draw no-WiFi icon if disconnected
   if (!wifiConnected) {

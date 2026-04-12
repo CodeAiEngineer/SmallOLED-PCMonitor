@@ -783,10 +783,19 @@ void drawPongDigits() {
   display.setTextSize(3);
   display.setTextColor(DISPLAY_WHITE);
 
+  // 12h/24h format support (v1.5.3)
+  int hour = displayed_hour;
+  bool isPM = false;
+  if (!settings.use24Hour) {
+    isPM = (hour >= 12);
+    if (hour == 0) hour = 12;
+    else if (hour > 12) hour -= 12;
+  }
+
   // Build digit string
   char digits[6];
-  digits[0] = '0' + (displayed_hour / 10);
-  digits[1] = '0' + (displayed_hour % 10);
+  digits[0] = '0' + (hour / 10);
+  digits[1] = '0' + (hour % 10);
   digits[2] = shouldShowColon() ? ':' : ' ';
   digits[3] = '0' + (displayed_min / 10);
   digits[4] = '0' + (displayed_min % 10);
@@ -830,6 +839,13 @@ void drawPongDigits() {
       display.setCursor(x, y);
       display.print(digits[i]);
     }
+  }
+  
+  // Draw AM/PM indicator (v1.5.3)
+  if (!settings.use24Hour) {
+    display.setTextSize(1);
+    display.setCursor(115, PONG_TIME_Y + 2);
+    display.print(isPM ? "P" : "A");
   }
 }
 
