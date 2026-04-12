@@ -15,6 +15,11 @@ void drawTimeWithBounce();
 void advanceDisplayedTime();
 void updateSpecificDigit(int digitIndex, int newValue);
 
+// Forward declarations for encounter functions
+void updateEncounter(struct tm* timeinfo);
+void drawEncounterElement();
+void startEncounter();
+
 // ========== Draw Time With Bounce Effect ==========
 void drawTimeWithBounce() {
   display.setTextSize(3);
@@ -120,10 +125,18 @@ void displayClockWithMario() {
   drawTimeWithBounce();
 
   updateMarioAnimation(&timeinfo);
+  
+  // Update and draw idle encounters (v1.5.2)
+  if (settings.marioIdleEncountersEnabled) {
+    updateEncounter(&timeinfo);
+  }
 
   int mario_draw_y = mario_base_y + (int)mario_jump_y;
   bool isJumping = (mario_state == MARIO_JUMPING);
   drawMario((int)mario_x, mario_draw_y, mario_facing_right, mario_walk_frame, isJumping);
+  
+  // Draw encounter element if active
+  drawEncounterElement();
 
   // Draw no-WiFi icon if disconnected
   if (!wifiConnected) {
@@ -164,6 +177,14 @@ void updateMarioAnimation(struct tm* timeinfo) {
     case MARIO_IDLE:
       mario_walk_frame = 0;
       mario_x = MARIO_START_X;
+      
+      // Check for idle encounter trigger (v1.5.2)
+      if (settings.marioIdleEncountersEnabled && !encounter_active && !animation_triggered) {
+        unsigned long currentMillis2 = millis();
+        if (currentMillis2 >= encounter_cooldown_end) {
+          startEncounter();
+        }
+      }
       break;
 
     case MARIO_WALKING:
@@ -319,5 +340,132 @@ void drawMario(int x, int y, bool facingRight, int frame, bool jumping) {
         display.fillRect(sx + 5, sy + 6, 2, 3, DISPLAY_WHITE);
       }
     }
+  }
+}
+
+// ========== Mario Idle Encounters (v1.5.2) ==========
+
+// Draw Goomba sprite (8x8)
+static void drawGoomba(int x, int y, int frame) {
+  if (x < -12 || x > SCREEN_WIDTH + 12) return;
+  // Body (brown-like shape)
+  display.fillRect(x + 1, y + 2, 6, 4, DISPLAY_WHITE);
+  display.fillRect(x + 0, y + 3, 8, 3, DISPLAY_WHITE);
+  // Eyes
+  display.drawPixel(x + 2, y + 3, DISPLAY_BLACK);
+  display.drawPixel(x + 5, y + 3, DISPLAY_BLACK);
+  // Feet (animated)
+  if (frame % 2 == 0) {
+    display.fillRect(x + 0, y + 6, 3, 2, DISPLAY_WHITE);
+    display.fillRect(x + 5, y + 6, 3, 2, DISPLAY_WHITE);
+  } else {
+    display.fillRect(x + 1, y + 6, 3, 2, DISPLAY_WHITE);
+    display.fillRect(x + 4, y + 6, 3, 2, DISPLAY_WHITE);
+  }
+}
+
+// Draw Koopa Troopa sprite (8x10), facing direction of movement
+static void drawKoopa(int x, int y, int dir, int frame) {
+  if (x < -12 || x > SCREEN_WIDTH + 12) return;
+  // Shell
+  display.fillRect(x + 1, y + 2, 6, 6, DISPLAY_WHITE);
+  // Head (facing direction of movement)
+  if (dir > 0) {
+    display.fillRect(x + 4, y + 0, 4, 3, DISPLAY_WHITE);
+    display.drawPixel(x + 6, y + 1, DISPLAY_BLACK);  // Eye
+  } else {
+    display.fillRect(x + 0, y + 0, 4, 3, DISPLAY_WHITE);
+    display.drawPixel(x + 1, y + 1, DISPLAY_BLACK);  // Eye
+  }
+  // Feet (animated)
+  if (frame % 2 == 0) {
+    display.fillRect(x + 1, y + 8, 2, 2, DISPLAY_WHITE);
+    display.fillRect(x + 5, y + 8, 2, 2, DISPLAY_WHITE);
+  } else {
+    display.fillRect(x + 2, y + 8, 2, 2, DISPLAY_WHITE);
+    display.fillRect(x + 4, y + 8, 2, 2, DISPLAY_WHITE);
+  }
+}
+
+// Start a random encounter
+void startEncounter() {
+  encounter_active = true;
+  encounter_type = (random(2) == 0) ? GOOMBA_TYPE : KOOPA_TYPE;
+  
+  // Random direction (left-to-right or right-to-left)
+  encounter_element_dir = (random(2) == 0) ? 1 : -1;
+  encounter_element_x = (encounter_element_dir > 0) ? -10 : SCREEN_WIDTH + 10;
+  encounter_element_y = ENCOUNTER_ELEMENT_Y;
+  encounter_element_frame = 0;
+  encounter_start_time = millis();
+  
+  // Set cooldown based on frequency setting
+  unsigned long cooldown;
+  switch (settings.marioEncounterFrequency) {
+    case 0: cooldown = random(ENCOUNTER_FREQ_RARE_MIN, ENCOUNTER_FREQ_RARE_MAX); break;
+    case 1: cooldown = random(ENCOUNTER_FREQ_NORMAL_MIN, ENCOUNTER_FREQ_NORMAL_MAX); break;
+    case 2: cooldown = random(ENCOUNTER_FREQ_FREQUENT_MIN, ENCOUNTER_FREQ_FREQUENT_MAX); break;
+    case 3: cooldown = random(ENCOUNTER_FREQ_CHAOTIC_MIN, ENCOUNTER_FREQ_CHAOTIC_MAX); break;
+    default: cooldown = random(ENCOUNTER_FREQ_NORMAL_MIN, ENCOUNTER_FREQ_NORMAL_MAX); break;
+  }
+  encounter_cooldown_end = millis() + cooldown;
+  
+  Serial.printf("Mario encounter started! Type: %s, Dir: %s\n",
+                encounter_type == GOOMBA_TYPE ? "Goomba" : "Koopa",
+                encounter_element_dir > 0 ? "L->R" : "R->L");
+}
+
+// Update encounter state
+void updateEncounter(struct tm* timeinfo) {
+  // Auto-abort at :56s to prioritize minute animation
+  if (timeinfo->tm_sec >= ENCOUNTER_AUTO_ABORT_SECOND) {
+    encounter_active = false;
+    return;
+  }
+
+  if (!encounter_active) return;
+
+  unsigned long currentMillis = millis();
+  unsigned long encounter_elapsed = currentMillis - encounter_start_time;
+  
+  // Max encounter duration: 8 seconds
+  if (encounter_elapsed > 8000) {
+    encounter_active = false;
+    Serial.println("Mario encounter ended (timeout)");
+    return;
+  }
+
+  // Get encounter speed based on setting
+  float speed;
+  switch (settings.marioEncounterSpeed) {
+    case 0: speed = ENCOUNTER_SPEED_SLOW / 10.0f; break;
+    case 1: speed = ENCOUNTER_SPEED_NORMAL / 10.0f; break;
+    case 2: speed = ENCOUNTER_SPEED_FAST / 10.0f; break;
+    default: speed = ENCOUNTER_SPEED_NORMAL / 10.0f; break;
+  }
+
+  // Move encounter element
+  encounter_element_x += speed * encounter_element_dir;
+  encounter_element_frame++;
+
+  // Check if element went off screen
+  if ((encounter_element_dir > 0 && encounter_element_x > SCREEN_WIDTH + 15) ||
+      (encounter_element_dir < 0 && encounter_element_x < -15)) {
+    encounter_active = false;
+    Serial.println("Mario encounter ended (element left screen)");
+  }
+}
+
+// Draw encounter element
+void drawEncounterElement() {
+  if (!encounter_active) return;
+
+  int ex = (int)encounter_element_x;
+  int ey = (int)encounter_element_y;
+
+  if (encounter_type == GOOMBA_TYPE) {
+    drawGoomba(ex, ey, encounter_element_frame);
+  } else {
+    drawKoopa(ex, ey, encounter_element_dir, encounter_element_frame);
   }
 }

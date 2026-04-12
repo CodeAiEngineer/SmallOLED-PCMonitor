@@ -78,7 +78,7 @@
 // Note: If TTP223 is not connected, GPIO 7 just floats harmlessly
 #define TOUCH_BUTTON_ENABLED 1           // 1 = enabled, 0 = disabled (always enabled now)
 #define TOUCH_BUTTON_PIN 7               // GPIO pin for TTP223 signal (default: GPIO 7)
-#define TOUCH_DEBOUNCE_MS 200            // Debounce delay in milliseconds (default: 200ms)
+#define TOUCH_DEBOUNCE_MS 50             // Debounce delay in milliseconds (default: 50ms, reduced from 200ms for faster response)
 #define TOUCH_ACTIVE_LEVEL HIGH          // HIGH = active HIGH, LOW = active LOW (TTP223 default: HIGH)
 
 // ========== LED PWM Night Light Configuration ==========

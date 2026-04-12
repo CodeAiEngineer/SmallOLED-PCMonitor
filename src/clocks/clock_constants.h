@@ -21,6 +21,24 @@
 // Second trigger threshold for animation
 #define MARIO_ANIMATION_TRIGGER_SECOND 55
 
+// Mario idle encounter settings (v1.5.2)
+#define ENCOUNTER_FREQ_RARE_MIN 25000      // 25s minimum
+#define ENCOUNTER_FREQ_RARE_MAX 35000      // 35s maximum
+#define ENCOUNTER_FREQ_NORMAL_MIN 15000    // 15s minimum
+#define ENCOUNTER_FREQ_NORMAL_MAX 25000    // 25s maximum
+#define ENCOUNTER_FREQ_FREQUENT_MIN 8000   // 8s minimum
+#define ENCOUNTER_FREQ_FREQUENT_MAX 15000  // 15s maximum
+#define ENCOUNTER_FREQ_CHAOTIC_MIN 2000    // 2s minimum
+#define ENCOUNTER_FREQ_CHAOTIC_MAX 5000    // 5s maximum
+#define ENCOUNTER_SPEED_SLOW 40            // Slow encounter speed
+#define ENCOUNTER_SPEED_NORMAL 80          // Normal encounter speed
+#define ENCOUNTER_SPEED_FAST 120           // Fast encounter speed
+#define ENCOUNTER_AUTO_ABORT_SECOND 56     // Abort encounters at :56s
+#define ENCOUNTER_ELEMENT_Y 52             // Ground level for encounter elements
+#define ENCOUNTER_ELEMENT_WIDTH 8          // Sprite width
+#define GOOMBA_TYPE 1
+#define KOOPA_TYPE 2
+
 // ========== Space Clock Constants ==========
 // Laser offset from character top (where laser starts)
 #define SPACE_LASER_OFFSET_Y 4

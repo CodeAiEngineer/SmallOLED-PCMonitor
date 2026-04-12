@@ -91,6 +91,9 @@ void loadSettings() {
     preferences.putUChar("marioBnceS", 6);    // Default: 0.6
     preferences.putBool("marioSmooth", false); // Default: 2-frame animation
     preferences.putUChar("marioWalkSpd", 20); // Default: 2.0
+    preferences.putBool("marioEncounter", false); // Default: disabled
+    preferences.putUChar("marioEncFreq", 1); // Default: Normal
+    preferences.putUChar("marioEncSpeed", 1); // Default: Normal
     preferences.putUChar("pongBallSpd", 18);  // Default: 18
     preferences.putUChar("pongBncStr", 3);    // Default: 0.3
     preferences.putUChar("pongBncDmp", 85);   // Default: 0.85
@@ -137,8 +140,8 @@ void loadSettings() {
   settings.displayRowMode = preferences.getInt("rowMode", 0); // Default: 5 rows
   settings.useRpmKFormat =
       preferences.getBool("rpmKFormat", false); // Default: Full RPM format
-  settings.useNetworkMBFormat = true;
-  preferences.putBool("netMBFormat", true);
+  settings.useNetworkMBFormat =
+      preferences.getBool("netMBFormat", true); // Default: MB format
   settings.colonBlinkMode =
       preferences.getUChar("colonBlink", 1); // Default: Blink
   settings.colonBlinkRate =
@@ -151,6 +154,15 @@ void loadSettings() {
       preferences.getBool("boostAnim", true); // Default: Enable
   settings.displayBrightness =
       preferences.getUChar("brightness", 255); // Default: 255 (max)
+  
+  // Brightness safety: prevent 0 on no-button builds (v1.5.3)
+#if !TOUCH_BUTTON_ENABLED
+  if (settings.displayBrightness < BRIGHTNESS_MIN) {
+    settings.displayBrightness = BRIGHTNESS_MIN;
+    preferences.putUChar("brightness", BRIGHTNESS_MIN);
+    Serial.printf("Brightness clamped to minimum %d (no-button build)\n", BRIGHTNESS_MIN);
+  }
+#endif
   settings.enableScheduledDimming =
       preferences.getBool("schedDim", false); // Default: Disabled
   settings.dimStartHour =
@@ -159,6 +171,14 @@ void loadSettings() {
       preferences.getUChar("dimEnd", 7); // Default: 7 AM
   settings.dimBrightness =
       preferences.getUChar("dimBright", 50); // Default: ~20% (50/255)
+  
+  // Dim brightness safety: prevent 0 (v1.5.3)
+#if !TOUCH_BUTTON_ENABLED
+  if (settings.dimBrightness < BRIGHTNESS_DIM_MIN) {
+    settings.dimBrightness = BRIGHTNESS_DIM_MIN;
+    preferences.putUChar("dimBright", BRIGHTNESS_DIM_MIN);
+  }
+#endif
 #if LED_PWM_ENABLED
   settings.ledEnabled = preferences.getBool("ledEnabled", false); // Default: Off
   settings.ledBrightness = preferences.getUChar("ledBright", 128); // Default: 50%
@@ -171,6 +191,12 @@ void loadSettings() {
       preferences.getBool("marioSmooth", false); // Default: 2-frame
   settings.marioWalkSpeed =
       preferences.getUChar("marioWalkSpd", 20); // Default: 2.0
+  settings.marioIdleEncountersEnabled =
+      preferences.getBool("marioEncounter", false); // Default: disabled
+  settings.marioEncounterFrequency =
+      preferences.getUChar("marioEncFreq", 1); // Default: Normal
+  settings.marioEncounterSpeed =
+      preferences.getUChar("marioEncSpeed", 1); // Default: Normal
   settings.pongBallSpeed =
       preferences.getUChar("pongBallSpd", 18); // Default: 18
   settings.pongBounceStrength =
@@ -358,6 +384,9 @@ void saveSettings() {
   preferences.putUChar("marioBnceS", settings.marioBounceSpeed);
   preferences.putBool("marioSmooth", settings.marioSmoothAnimation);
   preferences.putUChar("marioWalkSpd", settings.marioWalkSpeed);
+  preferences.putBool("marioEncounter", settings.marioIdleEncountersEnabled);
+  preferences.putUChar("marioEncFreq", settings.marioEncounterFrequency);
+  preferences.putUChar("marioEncSpeed", settings.marioEncounterSpeed);
   preferences.putUChar("pongBallSpd", settings.pongBallSpeed);
   preferences.putUChar("pongBncStr", settings.pongBounceStrength);
   preferences.putUChar("pongBncDmp", settings.pongBounceDamping);

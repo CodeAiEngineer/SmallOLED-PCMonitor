@@ -44,6 +44,16 @@ int target_digit_index[4] = {0};
 int target_digit_values[4] = {0};
 int current_target_index = 0;
 
+// Mario idle encounter state (v1.5.2)
+bool encounter_active = false;
+int encounter_type = 0;          // 0=none, 1=Goomba, 2=Koopa
+float encounter_element_x = 0;
+float encounter_element_y = ENCOUNTER_ELEMENT_Y;
+int encounter_element_dir = 1;    // -1=left, 1=right
+unsigned long encounter_start_time = 0;
+unsigned long encounter_cooldown_end = 0;
+int encounter_element_frame = 0;
+
 // Digit bounce animation state
 float digit_offset_y[5] = {0};
 float digit_velocity[5] = {0};

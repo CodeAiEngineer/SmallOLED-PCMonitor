@@ -168,19 +168,19 @@ int getOptimalRefreshRate() {
     // Clock mode (offline OR manual clock mode)
 
 #if TOUCH_BUTTON_ENABLED
-    // Immediately boost to 40 Hz when in manual clock mode for animated clocks
+    // Immediately boost to 60 Hz when in manual clock mode for animated clocks
     if (manualClockMode && settings.boostAnimationRefresh &&
         (settings.clockStyle == 0 || settings.clockStyle == 3 ||
          settings.clockStyle == 4 || settings.clockStyle == 5 ||
          settings.clockStyle == 6)) {
-      return 40; // Instant boost for smooth manual clock mode
+      return 60; // Instant boost for smooth manual clock mode
     }
 #endif
 
     // Check for animation boost (smooth animations during active motion)
     if (settings.boostAnimationRefresh && isAnimationActive()) {
-      // Animation is happening - boost to 40 Hz for silky smooth motion!
-      return 40;
+      // Animation is happening - boost to 60 Hz for silky smooth motion!
+      return 60;
     }
 
     if (settings.clockStyle == 0 || settings.clockStyle == 3 ||

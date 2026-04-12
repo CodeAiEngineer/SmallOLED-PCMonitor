@@ -8,6 +8,7 @@
 #include "../display/display.h"
 #include "../utils/utils.h"
 #include <Preferences.h>
+#include <ESPmDNS.h>
 #include <esp_wifi.h>
 
 #if TOUCH_BUTTON_ENABLED
@@ -297,6 +298,9 @@ void initNetwork() {
   udp.begin(UDP_PORT);
   Serial.print("UDP listening on port ");
   Serial.println(UDP_PORT);
+
+  // Start mDNS responder (v1.5.1)
+  initMDNS();
 }
 
 // ========== NTP Functions ==========
@@ -320,7 +324,7 @@ void initNTP() {
   }
 
   struct tm timeinfo;
-  for (int i = 0; i < 10; i++) {
+  for (int i = 0; i < 30; i++) {  // Increased from 10 to 30 for more reliable sync
     if (getLocalTime(&timeinfo, 100)) {
       if (timeinfo.tm_year > 120) {
         ntpSynced = true;
@@ -334,6 +338,22 @@ void initNTP() {
 
   if (!ntpSynced) {
     Serial.println("NTP sync pending, will retry in background");
+    // Restart SNTP client on failure to clear stale state
+    configTime(0, 0, NTP_SERVER_PRIMARY, NTP_SERVER_SECONDARY);
+  }
+}
+
+// ========== mDNS Initialization ==========
+void initMDNS() {
+  // Use device name from settings if available, otherwise use default
+  const char* hostname = "smalloled";  // Default hostname
+  
+  if (MDNS.begin(hostname)) {
+    MDNS.addService("pcmonitor", "tcp", 80);
+    MDNS.addService("pcmonitor", "udp", UDP_PORT);
+    Serial.printf("mDNS started: http://%s.local\n", hostname);
+  } else {
+    Serial.println("Error starting mDNS (non-critical)");
   }
 }
 
@@ -373,6 +393,7 @@ void handleWiFiReconnection() {
       Serial.println(WiFi.localIP());
       wifiDisconnectTime = 0;
       ntpSynced = false;  // Force NTP resync after reconnection
+      initMDNS();  // Restart mDNS after reconnection
     }
   }
 }

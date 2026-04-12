@@ -28,6 +28,9 @@ void applyStaticIP();
 // Initialize NTP time synchronization
 void initNTP();
 
+// Initialize mDNS responder
+void initMDNS();
+
 // Apply timezone settings
 void applyTimezone();
 

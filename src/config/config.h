@@ -17,6 +17,12 @@
 #define METRIC_UNIT_LEN 8
 #define TIMEOUT STATS_TIMEOUT
 
+// Brightness safety limits (v1.5.3)
+// Minimum brightness for no-button builds (prevents fully dark screen)
+#define BRIGHTNESS_MIN 1
+#define BRIGHTNESS_MAX 255
+#define BRIGHTNESS_DIM_MIN 5  // Minimum dim brightness (prevents full dark)
+
 // ========== Metric Structures ==========
 struct Metric {
   uint8_t id;
@@ -73,7 +79,7 @@ struct Settings {
   uint8_t colonBlinkRate;   // Tenths of Hz (10 = 1.0 Hz)
   uint8_t refreshRateMode;  // 0=Auto, 1=Manual
   uint8_t refreshRateHz;    // Manual refresh rate (1-60 Hz)
-  bool boostAnimationRefresh;  // Enable 40 Hz boost during animations
+  bool boostAnimationRefresh;  // Enable 60 Hz boost during animations
   uint8_t displayBrightness;   // Display brightness 0-255 (default: 255)
 
   // Scheduled dimming (night mode)
@@ -105,6 +111,11 @@ struct Settings {
   uint8_t marioBounceSpeed;   // Tenths (6 = 0.6)
   bool marioSmoothAnimation;  // Enable 4-frame walk cycle (default: false = 2-frame)
   uint8_t marioWalkSpeed;     // Tenths (20 = 2.0, 25 = 2.5 old/fast)
+  
+  // Mario idle encounter settings (v1.5.2)
+  bool marioIdleEncountersEnabled;    // Enable idle enemy encounters
+  uint8_t marioEncounterFrequency;    // 0=Rare, 1=Normal, 2=Frequent, 3=Chaotic
+  uint8_t marioEncounterSpeed;        // 0=Slow, 1=Normal, 2=Fast
 
   // Space clock settings
   uint8_t spaceCharacterType;   // 0=Invader, 1=Ship
