@@ -23,17 +23,34 @@ bool weatherShowing = false;
 static int weatherState = 0;
 static unsigned long stateStartTime = 0;
 
-// Weather icon mapping
-int getWeatherIcon(String desc) {
+// Convert Turkish characters to ASCII
+String toAscii(String input) {
+  input.replace("ç", "c");
+  input.replace("Ç", "C");
+  input.replace("ğ", "g");
+  input.replace("Ğ", "G");
+  input.replace("ı", "i");
+  input.replace("İ", "I");
+  input.replace("ö", "o");
+  input.replace("Ö", "O");
+  input.replace("ş", "s");
+  input.replace("Ş", "S");
+  input.replace("ü", "u");
+  input.replace("Ü", "U");
+  return input;
+}
+
+// Map weather condition to simple Turkish word
+String getSimpleWeatherDesc(String desc) {
   desc.toLowerCase();
-  if (desc.indexOf("sun") >= 0 || desc.indexOf("clear") >= 0) return 0;
-  if (desc.indexOf("partly cloudy") >= 0 || desc.indexOf("cloud") >= 0) return 1;
-  if (desc.indexOf("overcast") >= 0) return 2;
-  if (desc.indexOf("rain") >= 0 || desc.indexOf("drizzle") >= 0) return 3;
-  if (desc.indexOf("thunder") >= 0 || desc.indexOf("storm") >= 0) return 4;
-  if (desc.indexOf("snow") >= 0 || desc.indexOf("blizzard") >= 0) return 5;
-  if (desc.indexOf("fog") >= 0 || desc.indexOf("mist") >= 0) return 6;
-  return 1;
+  if (desc.indexOf("sun") >= 0 || desc.indexOf("clear") >= 0) return "GUNESLI";
+  if (desc.indexOf("partly cloudy") >= 0) return "AZ BULUTLU";
+  if (desc.indexOf("cloud") >= 0 || desc.indexOf("overcast") >= 0) return "BULUTLU";
+  if (desc.indexOf("rain") >= 0 || desc.indexOf("drizzle") >= 0) return "YAGMURLU";
+  if (desc.indexOf("thunder") >= 0 || desc.indexOf("storm") >= 0) return "SAGANAK";
+  if (desc.indexOf("snow") >= 0 || desc.indexOf("blizzard") >= 0) return "KARLI";
+  if (desc.indexOf("fog") >= 0 || desc.indexOf("mist") >= 0) return "SISLI";
+  return "ACIK";
 }
 
 void initWeather() {
@@ -231,20 +248,23 @@ void drawWeather() {
     return;
   }
 
+  display.clearDisplay();
   display.setTextColor(DISPLAY_WHITE);
 
-  // Temperature - HUGE, centered
-  display.setTextSize(4);
-  int tempWidth = weatherTemp.length() * 24;
-  int tempX = (SCREEN_WIDTH - tempWidth) / 2;
-  display.setCursor(tempX, 6);
-  display.print(weatherTemp);
+  // Clean temp: remove + sign if present
+  String cleanTemp = weatherTemp;
+  cleanTemp.replace("+", "");
+  cleanTemp.replace("°", "");
+  cleanTemp.replace("C", "");
+  cleanTemp.trim();
 
-  // Weather description - large, centered below temp
-  display.setTextSize(2);
-  const char* descText = weatherDesc.length() > 0 ? weatherDesc.c_str() : "Hava Durumu";
-  int descWidth = weatherDesc.length() > 0 ? weatherDesc.length() * 12 : 11 * 12;
-  int descX = (SCREEN_WIDTH - descWidth) / 2;
-  display.setCursor(descX, 44);
-  display.print(descText);
+  // Format: "11 - GUNESLI"
+  String weatherText = cleanTemp + " - " + getSimpleWeatherDesc(weatherDesc);
+
+  // Center text, size 3
+  display.setTextSize(3);
+  int textWidth = weatherText.length() * 18;
+  int x = (SCREEN_WIDTH - textWidth) / 2;
+  display.setCursor(x, 20);
+  display.print(weatherText);
 }
