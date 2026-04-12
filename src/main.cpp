@@ -131,6 +131,7 @@ void updateSpecificDigit(uint8_t digitIndex, uint8_t newValue);
 #include "metrics/metrics.h"
 #include "network/network.h"
 #include "web/web.h"
+#include "weather/weather.h"
 
 
 // ========== Helper Functions ==========
@@ -327,6 +328,9 @@ void setup() {
   // Initialize touch button
   initTouchButton();
 #endif
+
+  // Initialize weather module (Izmir Konak)
+  initWeather();
 
   showStartupProgress(100, "System ready!");
   delay(500);
