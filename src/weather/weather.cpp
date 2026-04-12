@@ -43,13 +43,21 @@ String toAscii(String input) {
 // Map weather condition to simple Turkish word
 String getSimpleWeatherDesc(String desc) {
   desc.toLowerCase();
-  if (desc.indexOf("sun") >= 0 || desc.indexOf("clear") >= 0) return "GUNESLI";
+  // English conditions
+  if (desc.indexOf("sunny") >= 0 || desc.indexOf("clear") >= 0) return "GUNESLI";
   if (desc.indexOf("partly cloudy") >= 0) return "AZ BULUTLU";
-  if (desc.indexOf("cloud") >= 0 || desc.indexOf("overcast") >= 0) return "BULUTLU";
+  if (desc.indexOf("overcast") >= 0) return "KAPALI";
+  if (desc.indexOf("cloud") >= 0) return "BULUTLU";
   if (desc.indexOf("rain") >= 0 || desc.indexOf("drizzle") >= 0) return "YAGMURLU";
   if (desc.indexOf("thunder") >= 0 || desc.indexOf("storm") >= 0) return "SAGANAK";
   if (desc.indexOf("snow") >= 0 || desc.indexOf("blizzard") >= 0) return "KARLI";
   if (desc.indexOf("fog") >= 0 || desc.indexOf("mist") >= 0) return "SISLI";
+  // Turkish conditions (wttr.in lang=tr)
+  if (desc.indexOf("gunes") >= 0 || desc.indexOf("acik") >= 0) return "ACIK";
+  if (desc.indexOf("bulut") >= 0 || desc.indexOf("kapali") >= 0) return "BULUTLU";
+  if (desc.indexOf("yagmur") >= 0 || desc.indexOf("yagmurlu") >= 0) return "YAGMURLU";
+  if (desc.indexOf("kar") >= 0) return "KARLI";
+  if (desc.indexOf("sis") >= 0) return "SISLI";
   return "ACIK";
 }
 
@@ -135,12 +143,15 @@ void updateWeather() {
       break;
       
     case 2: // SHOW - Display weather (handled by drawWeather)
-      // Check if 5 seconds elapsed
-      if (now - weatherDisplayStart >= WEATHER_DISPLAY_DURATION) {
-        weatherShowing = false;
-        weatherState = 3;
-        stateStartTime = now;
-        Serial.println("Weather: Moving to WAIT state");
+      // Check if display duration elapsed
+      {
+        unsigned long elapsed = now - weatherDisplayStart;
+        if (elapsed >= WEATHER_DISPLAY_DURATION) {
+          weatherShowing = false;
+          weatherState = 3;
+          stateStartTime = now;
+          Serial.printf("Weather: Moving to WAIT state after %lums\n", elapsed);
+        }
       }
       break;
       
@@ -251,14 +262,15 @@ void drawWeather() {
   display.clearDisplay();
   display.setTextColor(DISPLAY_WHITE);
 
-  // Clean temp: remove + sign if present
-  String cleanTemp = weatherTemp;
-  cleanTemp.replace("+", "");
-  cleanTemp.replace("°", "");
-  cleanTemp.replace("C", "");
-  cleanTemp.trim();
+  // Parse temperature: keep only digits and minus sign
+  String cleanTemp = "";
+  for (int i = 0; i < weatherTemp.length(); i++) {
+    char c = weatherTemp.charAt(i);
+    if (c >= '0' && c <= '9') cleanTemp += c;
+    if (c == '-' && cleanTemp.length() == 0) cleanTemp += c;
+  }
 
-  // Format: "11 - GUNESLI"
+  // Format: "10 - GUNESLI"
   String weatherText = cleanTemp + " - " + getSimpleWeatherDesc(weatherDesc);
 
   // Center text, size 3
