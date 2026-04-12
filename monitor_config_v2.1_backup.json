@@ -1,0 +1,69 @@
+{
+  "version": "2.1",
+  "esp32_ip": "192.168.1.162",
+  "udp_port": 4210,
+  "update_interval": 2.0,
+  "metrics": [
+    {
+      "name": "CPU",
+      "display_name": "CPU Usage",
+      "source": "psutil",
+      "type": "percent",
+      "unit": "%",
+      "psutil_method": "cpu_percent",
+      "custom_label": "",
+      "current_value": 0,
+      "id": 1
+    },
+    {
+      "name": "RAM",
+      "display_name": "RAM Usage",
+      "source": "psutil",
+      "type": "percent",
+      "unit": "%",
+      "psutil_method": "virtual_memory.percent",
+      "custom_label": "",
+      "current_value": 67,
+      "id": 2
+    },
+    {
+      "name": "GPUT",
+      "display_name": "GPU Core [gpu-nvidia]",
+      "source": "wmi",
+      "type": "temperature",
+      "unit": "C",
+      "wmi_identifier": "/gpu-nvidia/0/temperature/0",
+      "wmi_sensor_name": "GPU Core",
+      "custom_label": "",
+      "current_value": 41,
+      "is_active_nic": false,
+      "id": 3
+    },
+    {
+      "name": "VRAM",
+      "display_name": "GPU Memory Controller [gpu-nvidia]",
+      "source": "wmi",
+      "type": "load",
+      "unit": "%",
+      "wmi_identifier": "/gpu-nvidia/0/load/1",
+      "wmi_sensor_name": "GPU Memory Controller",
+      "custom_label": "",
+      "current_value": 5,
+      "is_active_nic": false,
+      "id": 4
+    },
+    {
+      "name": "NET%7B2D2",
+      "display_name": "Download Speed [nic]",
+      "source": "wmi",
+      "type": "throughput",
+      "unit": "KB/s",
+      "wmi_identifier": "/nic/%7B2D4D13F6-C2C0-42B3-9FB1-7F3AF78AB968%7D/throughput/8",
+      "wmi_sensor_name": "Download Speed",
+      "custom_label": "",
+      "current_value": 966246,
+      "is_active_nic": true,
+      "id": 5
+    }
+  ]
+}

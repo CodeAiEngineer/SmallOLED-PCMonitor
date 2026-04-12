@@ -1,6 +1,6 @@
 """
-PC Stats Monitor v2.0 - Dynamic Sensor Selection
-Flexible monitoring system with GUI configuration and up to 12 customizable metrics
+PC Stats Monitor v3.0 - Pure Python Hardware Monitoring
+No external monitoring app needed. Uses psutil, pynvml (GPU), and HWiNFO (CPU temp).
 """
 
 import psutil
@@ -13,9 +13,13 @@ import argparse
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox
-from urllib import request as urllib_request
-from urllib import error as urllib_error
 import re
+
+# Import native sensor modules
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gpu_sensor
+import hwinfo_sensor
+import net_monitor
 
 # Try to import pystray for system tray support
 try:
@@ -25,7 +29,7 @@ try:
 except ImportError:
     TRAY_AVAILABLE = False
 
-# Try to import pythoncom for COM initialization (needed for WMI with pythonw.exe)
+# Try to import pythoncom for COM initialization (needed with pythonw.exe)
 try:
     import pythoncom
     PYTHONCOM_AVAILABLE = True
@@ -33,13 +37,12 @@ except ImportError:
     PYTHONCOM_AVAILABLE = False
 
 # Configuration file path - use absolute path to work correctly from any working directory
-# This fixes autostart issues where Windows ignores WorkingDirectory in shortcuts
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "monitor_config.json")
 
 # Default configuration
 DEFAULT_CONFIG = {
-    "version": "2.1",
+    "version": "3.0",
     "esp32_ip": "192.168.0.163",
     "udp_port": 4210,
     "update_interval": 3,
@@ -47,1004 +50,53 @@ DEFAULT_CONFIG = {
 }
 
 # Maximum metrics supported by ESP32
-MAX_METRICS = 20  # Increased from 12 to support companion metrics
+MAX_METRICS = 20
 
 # Global sensor database
 sensor_database = {
-    "system": [],    # psutil-based metrics (CPU%, RAM%, Disk%)
-    "temperature": [],
-    "fan": [],
-    "load": [],
-    "clock": [],
-    "power": [],
-    "data": [],       # Network/disk data (uploaded/downloaded GB)
-    "throughput": [], # Network throughput (upload/download speed KB/s, MB/s)
+    "system": [],       # psutil-based metrics (CPU%, RAM%, Disk%)
+    "temperature": [],  # CPU/GPU temperature from HWiNFO + GPU module
+    "fan": [],          # Fan speeds from HWiNFO
+    "load": [],         # GPU load, VRAM usage
+    "clock": [],        # GPU clock
+    "power": [],        # Power from HWiNFO
+    "data": [],         # VRAM used in MB
+    "throughput": [],   # Network upload/download speed
     "other": []
 }
-
-# Global variable for discovered WMI namespace (can be auto-detected)
-discovered_wmi_namespace = "root\\LibreHardwareMonitor"  # Default
-
-# Global variables for REST API (alternative to WMI for LHM 0.9.5+)
-rest_api_host = "localhost"
-rest_api_port = 8085
-use_rest_api = False  # Auto-detected; True when WMI fails but REST API works
-
-
-class LHMHealthMonitor:
-    """
-    Monitors LibreHardwareMonitor REST API health.
-    Tracks consecutive failures and provides exponential backoff for recovery.
-    """
-    def __init__(self):
-        self.consecutive_failures = 0
-        self.last_success_time = time.time()
-        self.is_healthy = True
-        self.last_warning_time = 0
-
-    def record_success(self):
-        """Record a successful API call"""
-        if not self.is_healthy:
-            print("  ✓ LHM connection restored!")
-        self.consecutive_failures = 0
-        self.last_success_time = time.time()
-        self.is_healthy = True
-
-    def record_failure(self):
-        """Record a failed API call"""
-        self.consecutive_failures += 1
-        if self.consecutive_failures >= 2:  # Trigger faster (was 3)
-            if self.is_healthy:
-                print("  ⚠ LHM REST API unhealthy - entering recovery mode")
-            self.is_healthy = False
-
-    def get_retry_delay(self):
-        """Exponential backoff: 3s, 6s, 12s, max 30s"""
-        if self.consecutive_failures <= 1:
-            return 3
-        delay = min(3 * (2 ** (self.consecutive_failures - 1)), 30)
-        return delay
-
-    def should_print_warning(self):
-        """Limit warning messages to once per 30 seconds"""
-        now = time.time()
-        if now - self.last_warning_time >= 30:
-            self.last_warning_time = now
-            return True
-        return False
-
-
-# Global health monitor instance
-lhm_health_monitor = LHMHealthMonitor()
-
-
-def is_lhm_process_running():
-    """Check if LibreHardwareMonitor process is running"""
-    lhm_names = ["librehardwaremonitor", "libre hardware monitor"]
-    for proc in psutil.process_iter(['name']):
-        try:
-            proc_name = proc.info['name'].lower()
-            if any(name in proc_name for name in lhm_names):
-                return True
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
-    return False
-
-
-def discover_wmi_namespaces():
-    """
-    Quick check for WMI namespace (simplified for 0.9.5+ compatibility)
-    Returns: (list_of_namespaces, working_namespace)
-    """
-    print("\nChecking WMI namespace...")
-
-    namespace = "root\\LibreHardwareMonitor"
-    try:
-        import wmi
-        w = wmi.WMI(namespace=namespace)
-        sensors = list(w.Sensor())
-
-        if len(sensors) > 0:
-            print(f"  ✓ WMI working with {len(sensors)} sensors")
-            return [namespace], namespace
-        else:
-            print(f"  ⚠ WMI accessible but 0 sensors (LibreHardwareMonitor 0.9.5+ issue)")
-            print(f"  → Will use REST API fallback")
-            return [], None
-    except Exception as e:
-        print(f"  ✗ WMI not accessible: {str(e)[:60]}")
-        print(f"  → Will use REST API fallback")
-        return [], None
-
-
-def get_librehardwaremonitor_version():
-    """
-    Try to detect LibreHardwareMonitor version
-    Returns: version string or None
-    """
-    version = None
-
-    # Method 1: Check executable version
-    try:
-        import win32api
-        import win32con
-        import os
-
-        # Common installation paths
-        possible_paths = [
-            r"C:\Program Files\LibreHardwareMonitor\LibreHardwareMonitor.exe",
-            r"C:\Program Files (x86)\LibreHardwareMonitor\LibreHardwareMonitor.exe",
-            r"C:\Users\Public\Desktop\LibreHardwareMonitor.exe",
-        ]
-
-        # Also check PATH
-        try:
-            import shutil
-            exe_path = shutil.which("LibreHardwareMonitor.exe")
-            if exe_path:
-                possible_paths.insert(0, exe_path)
-        except:
-            pass
-
-        for path in possible_paths:
-            if os.path.exists(path):
-                try:
-                    info = win32api.GetFileVersionInfo(path, "\\")
-                    ms = info['FileVersionMS']
-                    ls = info['FileVersionLS']
-                    version = f"{win32api.HIWORD(ms)}.{win32api.LOWORD(ms)}.{win32api.HIWORD(ls)}.{win32api.LOWORD(ls)}"
-                    return version
-                except:
-                    pass
-    except:
-        pass
-
-    # Method 2: Try to get version from WMI
-    try:
-        import wmi
-        w = wmi.WMI()
-        # Try to find LibreHardwareMonitor process and get its version
-        import psutil
-        for proc in psutil.process_iter(['name', 'exe']):
-            try:
-                if 'librehardwaremonitor' in proc.info['name'].lower():
-                    exe_path = proc.info['exe']
-                    if exe_path and os.path.exists(exe_path):
-                        import win32api
-                        info = win32api.GetFileVersionInfo(exe_path, "\\")
-                        ms = info['FileVersionMS']
-                        ls = info['FileVersionLS']
-                        version = f"{win32api.HIWORD(ms)}.{win32api.LOWORD(ms)}.{win32api.HIWORD(ls)}.{win32api.LOWORD(ls)}"
-                        return version
-            except:
-                pass
-    except:
-        pass
-
-    return None
-
-
-def extract_sensors_from_tree(node, sensor_list=None, parent_hardware=None):
-    """
-    Recursively extract all sensors from LibreHardwareMonitor REST API tree structure.
-    The API returns a hierarchical tree where actual sensors have a 'SensorId' field.
-    Tracks parent hardware name to provide better context for sensors.
-    """
-    if sensor_list is None:
-        sensor_list = []
-
-    # Check if this node is a hardware device (has children but no SensorId)
-    # Hardware nodes have Text like "Intel Ethernet I219-V" or "NVIDIA GeForce RTX 3080"
-    current_hardware = parent_hardware
-    if "Children" in node and "SensorId" not in node:
-        # This might be a hardware node - use its name as parent for children
-        if node.get("Text") and node.get("Text") != "Sensor":
-            current_hardware = node.get("Text")
-
-    # If this node has a SensorId, it's an actual sensor
-    if "SensorId" in node:
-        # Add parent hardware name to sensor for better identification
-        sensor_copy = node.copy()
-        if current_hardware:
-            sensor_copy["_parent_hardware"] = current_hardware
-        sensor_list.append(sensor_copy)
-
-    # Recursively process children
-    if "Children" in node and isinstance(node["Children"], list):
-        for child in node["Children"]:
-            extract_sensors_from_tree(child, sensor_list, current_hardware)
-
-    return sensor_list
-
-
-def check_rest_api_connectivity(host, port):
-    """
-    Check if LibreHardwareMonitor REST API is accessible
-    Returns: (success, sensor_count, error_message)
-    """
-    url = f"http://{host}:{port}/data.json"
-
-    try:
-        req = urllib_request.Request(url, method='GET')
-        req.add_header('User-Agent', 'PC-Stats-Monitor/2.0')
-
-        with urllib_request.urlopen(req, timeout=3) as response:
-            if response.status == 200:
-                data = response.read().decode('utf-8')
-                root = json.loads(data)
-
-                # Extract sensors from tree structure
-                sensors = extract_sensors_from_tree(root)
-
-                if len(sensors) > 0:
-                    return True, len(sensors), None
-                else:
-                    return False, 0, "REST API returned no sensors"
-            else:
-                return False, 0, f"HTTP {response.status}"
-
-    except urllib_error.HTTPError as e:
-        return False, 0, f"HTTP error {e.code}"
-    except urllib_error.URLError as e:
-        return False, 0, f"Connection failed: {e.reason}"
-    except json.JSONDecodeError as e:
-        return False, 0, f"Invalid JSON response: {e}"
-    except Exception as e:
-        return False, 0, f"Unexpected error: {e}"
-
-
-def discover_sensors_via_http(host, port):
-    """
-    Discover sensors via LibreHardwareMonitor REST API
-    This is used when WMI fails (LHM 0.9.5+)
-    """
-    global sensor_database
-
-    url = f"http://{host}:{port}/data.json"
-
-    try:
-        req = urllib_request.Request(url, method='GET')
-        req.add_header('User-Agent', 'PC-Stats-Monitor/2.0')
-
-        with urllib_request.urlopen(req, timeout=5) as response:
-            if response.status != 200:
-                print(f"  ✗ HTTP error {response.status}")
-                return False
-
-            data = response.read().decode('utf-8')
-            root = json.loads(data)
-
-            # Extract sensors from tree structure
-            sensors = extract_sensors_from_tree(root)
-
-            # Reset name tracker to ensure fresh unique names
-            reset_generated_names()
-
-            sensor_count = 0
-            for sensor in sensors:
-                # Map REST API fields to our sensor_database format
-                sensor_id = sensor.get("SensorId", "")
-                sensor_name = sensor.get("Text", "Unknown")
-                sensor_type = sensor.get("Type", "").lower()
-                sensor_value = sensor.get("Value", "0")
-
-                # Skip if missing critical fields
-                if not sensor_id or not sensor_name:
-                    continue
-
-                # Parse value from string (e.g., "45.0 °C" -> 45.0)
-                original_value_str = str(sensor_value)
-                try:
-                    # Extract numeric value from string like "45.0 °C" or "12.1 %"
-                    value_match = re.search(r'[-+]?\d*\.?\d+', original_value_str)
-                    if value_match:
-                        sensor_value = float(value_match.group())
-                    else:
-                        sensor_value = 0
-
-                    # Normalize throughput to KB/s for ESP32
-                    if sensor_type == "throughput":
-                        value_upper = original_value_str.upper()
-                        if "GB/S" in value_upper:
-                            # GB/s → KB/s: multiply by 1024*1024
-                            sensor_value = sensor_value * 1024 * 1024
-                        elif "MB/S" in value_upper:
-                            # MB/s → KB/s: multiply by 1024
-                            sensor_value = sensor_value * 1024
-                        elif "KB/S" in value_upper:
-                            # Already KB/s, no conversion needed
-                            pass
-                        elif "B/S" in value_upper or not any(x in value_upper for x in ['/', 'S']):
-                            # B/s or raw bytes → KB/s: divide by 1024
-                            sensor_value = sensor_value / 1024
-                        # Multiply by 10 to preserve 1 decimal place (ESP32 will divide by 10)
-                        sensor_value = sensor_value * 10
-                except:
-                    sensor_value = 0
-
-                # Determine unit based on type
-                unit_map = {
-                    "temperature": "C",  # No degree symbol - OLED can't display it
-                    "fan": "RPM",
-                    "load": "%",
-                    "clock": "MHz",
-                    "power": "W",
-                    "voltage": "V",
-                    "data": "GB",
-                    "smalldata": "MB",
-                    "control": "%",
-                    "level": "%",
-                    "throughput": "KB/s",
-                }
-                sensor_unit = unit_map.get(sensor_type, "")
-
-                # Generate short name from sensor_id and sensor_name for uniqueness
-                short_name = generate_short_name_from_id(sensor_id, sensor_type, sensor_name)
-
-                # Build display name with device context
-                identifier_parts = sensor_id.split('/')
-                parent_hardware = sensor.get("_parent_hardware", "")
-
-                # For network sensors, use parent hardware name (actual NIC name)
-                if "nic" in sensor_id.lower() and parent_hardware:
-                    # Use friendly NIC name instead of GUID
-                    display_name = f"{sensor_name} [{parent_hardware}]"
-                elif len(identifier_parts) > 1:
-                    device_info = identifier_parts[1]
-                    if device_info.lower() not in sensor_name.lower():
-                        display_name = f"{sensor_name} [{device_info}]"
-                    else:
-                        display_name = sensor_name
-                else:
-                    display_name = sensor_name
-
-                # Check if this is an active network interface (has traffic)
-                is_active_nic = False
-                if "nic" in sensor_id.lower() and sensor_type == "throughput":
-                    if sensor_value > 0:
-                        is_active_nic = True
-
-                # Reclassify ambiguous types based on device context
-                # Memory metrics are tagged as "data" but should be in "system"
-                device_id_lower = sensor_id.lower()
-                sensor_name_lower = sensor_name.lower()
-
-                if sensor_type in ("data", "smalldata"):
-                    # Check if this is memory-related (not network data)
-                    if ("memory" in device_id_lower or "ram" in device_id_lower or
-                        "vram" in device_id_lower or
-                        ("gpu" in device_id_lower and ("memory" in sensor_name_lower or "vram" in sensor_name_lower))):
-                        # Reclassify memory as system metric
-                        sensor_type = "memory"
-
-                sensor_info = {
-                    "name": short_name,
-                    "display_name": display_name,
-                    "source": "wmi",  # Keep as "wmi" for compatibility
-                    "type": sensor_type,
-                    "unit": sensor_unit,
-                    "wmi_identifier": sensor_id,
-                    "wmi_sensor_name": sensor_name,
-                    "custom_label": "",
-                    "current_value": int(sensor_value),
-                    "is_active_nic": is_active_nic,  # True if network interface has traffic
-                    "parent_hardware": parent_hardware  # Hardware name (useful for NICs)
-                }
-
-                # Categorize sensor
-                if sensor_type == "temperature":
-                    sensor_database["temperature"].append(sensor_info)
-                elif sensor_type == "fan":
-                    sensor_database["fan"].append(sensor_info)
-                elif sensor_type == "load":
-                    sensor_database["load"].append(sensor_info)
-                elif sensor_type == "clock":
-                    sensor_database["clock"].append(sensor_info)
-                elif sensor_type == "power":
-                    sensor_database["power"].append(sensor_info)
-                elif sensor_type == "memory":  # Reclassified memory metrics
-                    sensor_database["system"].append(sensor_info)
-                elif sensor_type in ("data", "smalldata"):  # Now only actual network data
-                    sensor_database["data"].append(sensor_info)
-                elif sensor_type == "throughput":
-                    sensor_database["throughput"].append(sensor_info)
-                else:
-                    sensor_database["other"].append(sensor_info)
-
-                sensor_count += 1
-
-            if sensor_count > 0:
-                print(f"  ✓ Found {sensor_count} hardware sensors via REST API:")
-                print(f"    - Temperatures: {len(sensor_database['temperature'])}")
-                print(f"    - Fans: {len(sensor_database['fan'])}")
-                print(f"    - Loads: {len(sensor_database['load'])}")
-                print(f"    - Clocks: {len(sensor_database['clock'])}")
-                print(f"    - Power: {len(sensor_database['power'])}")
-                print(f"    - Data: {len(sensor_database['data'])}")
-                print(f"    - Throughput: {len(sensor_database['throughput'])}")
-                if len(sensor_database['other']) > 0:
-                    print(f"    - Other: {len(sensor_database['other'])}")
-                return True
-            else:
-                print("  ⚠ REST API returned 0 sensors")
-                return False
-
-    except urllib_error.HTTPError as e:
-        print(f"  ✗ HTTP error {e.code}")
-        return False
-    except urllib_error.URLError as e:
-        print(f"  ✗ Connection failed: {e.reason}")
-        return False
-    except Exception as e:
-        print(f"  ✗ Error: {e}")
-        return False
-
-
-def get_metric_value_via_http(metric_config, host, port):
-    """
-    Get sensor value via LibreHardwareMonitor REST API
-    Used when use_rest_api = True
-
-    Returns: int value on success, None on failure (to distinguish from real zeros)
-    """
-    global lhm_health_monitor
-
-    sensor_id = metric_config.get("wmi_identifier", "")
-    if not sensor_id:
-        return None
-
-    url = f"http://{host}:{port}/data.json"
-    is_throughput = metric_config.get("unit", "") == "KB/s"
-
-    try:
-        req = urllib_request.Request(url, method='GET')
-        req.add_header('User-Agent', 'PC-Stats-Monitor/2.0')
-
-        with urllib_request.urlopen(req, timeout=1) as response:  # 1s timeout for fast failure detection
-            if response.status != 200:
-                lhm_health_monitor.record_failure()
-                return None
-
-            data = response.read().decode('utf-8')
-            root = json.loads(data)
-
-            # Extract sensors from tree structure
-            sensors = extract_sensors_from_tree(root)
-
-            # Find matching sensor by SensorId
-            for sensor in sensors:
-                if sensor.get("SensorId", "") == sensor_id:
-                    value = sensor.get("Value", "0")
-                    value_str = str(value)
-                    # Parse value from string (e.g., "45.0 °C" -> 45.0)
-                    try:
-                        value_match = re.search(r'[-+]?\d*\.?\d+', value_str)
-                        if value_match:
-                            float_value = float(value_match.group())
-                            # For throughput: multiply by 10 to preserve 1 decimal place
-                            # ESP32 will divide by 10 when displaying
-                            if is_throughput:
-                                # Normalize throughput to KB/s for ESP32
-                                value_upper = value_str.upper()
-                                if "GB/S" in value_upper:
-                                    # GB/s → KB/s
-                                    float_value = float_value * 1024 * 1024
-                                elif "MB/S" in value_upper:
-                                    # MB/s → KB/s
-                                    float_value = float_value * 1024
-                                elif "KB/S" in value_upper:
-                                    # Already KB/s
-                                    pass
-                                elif "B/S" in value_upper or not any(x in value_upper for x in ['/', 'S']):
-                                    # B/s or raw bytes → KB/s
-                                    float_value = float_value / 1024
-                                float_value = float_value * 10
-                            lhm_health_monitor.record_success()
-                            return int(float_value)
-                    except:
-                        pass
-                    # Sensor found but value parsing failed
-                    lhm_health_monitor.record_success()  # API is working
-                    return 0
-
-            # Sensor not found in response
-            lhm_health_monitor.record_success()  # API is working
-            return 0
-
-    except Exception:
-        lhm_health_monitor.record_failure()
-        return None
-
-
-# Global tracker for generated names to ensure uniqueness
-_generated_names = set()
-
-
-def reset_generated_names():
-    """Reset the name tracker - call before sensor discovery"""
-    global _generated_names
-    _generated_names = set()
-
-
-def _make_unique_name(base_name):
-    """Ensure name is unique by adding suffix if needed"""
-    global _generated_names
-
-    # Truncate base to max 10 chars
-    base_name = base_name[:10]
-
-    if base_name not in _generated_names:
-        _generated_names.add(base_name)
-        return base_name
-
-    # Add numeric suffix to make unique
-    for i in range(1, 100):
-        candidate = f"{base_name[:8]}{i}" if len(base_name) > 8 else f"{base_name}{i}"
-        candidate = candidate[:10]
-        if candidate not in _generated_names:
-            _generated_names.add(candidate)
-            return candidate
-
-    return base_name  # Fallback
-
-
-def _extract_context_suffix(sensor_name):
-    """Extract context suffix from sensor name"""
-    name_lower = sensor_name.lower()
-
-    # Memory/data context
-    if "used" in name_lower:
-        return "_U"
-    elif "available" in name_lower or "avail" in name_lower:
-        return "_A"
-    elif "capacity" in name_lower:
-        return "_CAP"
-    elif "total" in name_lower:
-        return "_TOT"
-    elif "free" in name_lower:
-        return "_F"
-
-    # Temperature context
-    elif "core max" in name_lower:
-        return "_MAX"
-    elif "core avg" in name_lower or "average" in name_lower:
-        return "_AVG"
-    elif "hotspot" in name_lower:
-        return "_HOT"
-    elif "junction" in name_lower:
-        return "_JNC"
-
-    return ""
-
-
-def generate_short_name_from_id(sensor_id, sensor_type, sensor_name=""):
-    """
-    Generate unique short name from sensor_id and sensor_name (REST API format)
-    Uses sensor_name context to differentiate similar sensors
-    """
-    parts = sensor_id.split('/')
-    name_lower = sensor_name.lower()
-
-    # Get context suffix from sensor name
-    context = _extract_context_suffix(sensor_name)
-
-    if len(parts) >= 4:
-        device = parts[1]  # e.g., "intelcpu", "gpu-nvidia", "lpc", "nic"
-        device_lower = device.lower()
-        device_idx = parts[2] if len(parts) > 2 else "0"
-        sensor_idx = parts[-1]  # Last part is usually the sensor index
-
-        # CPU sensors
-        if "cpu" in device_lower:
-            if sensor_type == "load":
-                if "total" in name_lower or sensor_idx == "0":
-                    base = "CPU"
-                else:
-                    base = f"CPU_C{sensor_idx}"
-            elif sensor_type == "temperature":
-                if "core max" in name_lower:
-                    base = "CPU_MAX"
-                elif "core avg" in name_lower or "average" in name_lower:
-                    base = "CPU_AVG"
-                elif "core" in name_lower and "p-core" not in name_lower and "e-core" not in name_lower:
-                    base = f"CPUT{sensor_idx}"
-                elif "p-core" in name_lower:
-                    base = f"CPUP{sensor_idx}"
-                elif "e-core" in name_lower:
-                    base = f"CPUE{sensor_idx}"
-                elif "ccd" in name_lower:
-                    base = f"CCD{sensor_idx}T"
-                else:
-                    base = f"CPUT{sensor_idx}" if sensor_idx != "0" else "CPUT"
-            elif sensor_type == "power":
-                if "package" in name_lower:
-                    base = "CPU_PKG"
-                elif "core" in name_lower:
-                    base = "CPU_COR"
-                else:
-                    base = f"CPUW{sensor_idx}" if sensor_idx != "0" else "CPUW"
-            elif sensor_type == "clock":
-                base = f"CPUCLK{sensor_idx}" if sensor_idx != "0" else "CPUCLK"
-            else:
-                base = f"CPU_{sensor_idx}"
-            return _make_unique_name(base)
-
-        # GPU sensors
-        elif "gpu" in device_lower or "nvidia" in device_lower or "amd" in device_lower:
-            gpu_idx = "" if device_idx == "0" else device_idx
-            if sensor_type == "load":
-                if "memory" in name_lower or "vram" in name_lower:
-                    base = f"VRAM{gpu_idx}"
-                elif "core" in name_lower or sensor_idx == "0":
-                    base = f"GPU{gpu_idx}"
-                else:
-                    base = f"GPU{gpu_idx}_{sensor_idx}"
-            elif sensor_type == "temperature":
-                if "hotspot" in name_lower:
-                    base = f"GPU{gpu_idx}_HOT"
-                elif "memory" in name_lower or "vram" in name_lower:
-                    base = f"VRAM{gpu_idx}T"
-                else:
-                    base = f"GPUT{gpu_idx}"
-            elif sensor_type == "power":
-                base = f"GPUW{gpu_idx}"
-            elif sensor_type == "clock":
-                if "memory" in name_lower:
-                    base = f"VCLK{gpu_idx}"
-                else:
-                    base = f"GCLK{gpu_idx}"
-            elif sensor_type == "fan":
-                base = f"GPUF{gpu_idx}_{sensor_idx}" if sensor_idx != "0" else f"GPUF{gpu_idx}"
-            elif sensor_type in ("data", "smalldata"):
-                # GPU memory data
-                base = f"VRAM{gpu_idx}{context}"
-            else:
-                base = f"GPU{gpu_idx}_{sensor_idx}"
-            return _make_unique_name(base)
-
-        # LPC/Motherboard sensors (VRM, PCH, System temps, etc.)
-        elif "lpc" in device_lower or "motherboard" in device_lower or "mainboard" in device_lower:
-            if sensor_type == "temperature":
-                if "vrm" in name_lower:
-                    base = "VRM_T"
-                elif "mos" in name_lower:
-                    base = "MOS_T"
-                elif "pch" in name_lower:
-                    base = "PCH_T"
-                elif "cpu" in name_lower and "socket" in name_lower:
-                    base = "CPUS_T"
-                elif "system" in name_lower:
-                    base = f"SYS{sensor_idx}T"
-                elif "pcie" in name_lower or "pci" in name_lower:
-                    base = f"PCIE{sensor_idx}T"
-                elif "m.2" in name_lower or "m2" in name_lower:
-                    base = f"M2_{sensor_idx}T"
-                elif "chipset" in name_lower:
-                    base = "CHIP_T"
-                else:
-                    # Generic LPC temperature
-                    base = f"MB{sensor_idx}T"
-            elif sensor_type == "fan":
-                if "cpu" in name_lower:
-                    base = "CPUF"
-                elif "pump" in name_lower:
-                    base = "PUMP"
-                elif "chassis" in name_lower:
-                    base = f"CHS{sensor_idx}F"
-                elif "system" in name_lower:
-                    # Extract fan number from name like "System Fan #1"
-                    fan_match = re.search(r'#(\d+)', sensor_name)
-                    if fan_match:
-                        base = f"SYS{fan_match.group(1)}F"
-                    else:
-                        base = f"SYS{sensor_idx}F"
-                elif "aux" in name_lower:
-                    base = f"AUX{sensor_idx}F"
-                else:
-                    base = f"FAN{sensor_idx}"
-            elif sensor_type == "voltage":
-                if "vcore" in name_lower or "cpu" in name_lower:
-                    base = "VCORE"
-                elif "vram" in name_lower or "memory" in name_lower:
-                    base = "VMEM"
-                elif "+12v" in name_lower or "12v" in name_lower:
-                    base = "V12"
-                elif "+5v" in name_lower or "5v" in name_lower:
-                    base = "V5"
-                elif "+3.3v" in name_lower or "3.3v" in name_lower:
-                    base = "V3_3"
-                else:
-                    base = f"V{sensor_idx}"
-            elif sensor_type == "control":
-                base = f"CTL{sensor_idx}"
-            else:
-                base = f"LPC{sensor_idx}"
-            return _make_unique_name(base)
-
-        # Memory/RAM sensors
-        elif "memory" in device_lower or "ram" in device_lower:
-            if sensor_type in ("data", "smalldata", "memory"):
-                if "vram" in name_lower:
-                    base = f"VRAM{context}"
-                elif "capacity" in name_lower:
-                    base = f"RAM_CAP"
-                elif "used" in name_lower:
-                    base = "RAM_U"
-                elif "available" in name_lower or "avail" in name_lower:
-                    base = "RAM_A"
-                else:
-                    base = f"RAM{context}" if context else f"RAM{sensor_idx}"
-            elif sensor_type == "load":
-                base = "RAM"
-            else:
-                base = f"RAM{sensor_idx}"
-            return _make_unique_name(base)
-
-        # Network sensors
-        elif "nic" in device_lower or "network" in device_lower:
-            net_idx = "" if device_idx == "0" else device_idx
-            if sensor_type == "throughput":
-                if "upload" in name_lower or "sent" in name_lower:
-                    base = f"NET{net_idx}_U"
-                elif "download" in name_lower or "received" in name_lower:
-                    base = f"NET{net_idx}_D"
-                else:
-                    # Use sensor index: 0=upload, 1=download typically
-                    if sensor_idx == "0":
-                        base = f"NET{net_idx}_U"
-                    else:
-                        base = f"NET{net_idx}_D"
-            elif sensor_type == "data":
-                if "upload" in name_lower or "sent" in name_lower:
-                    base = f"NTD{net_idx}_U"
-                elif "download" in name_lower or "received" in name_lower:
-                    base = f"NTD{net_idx}_D"
-                else:
-                    base = f"NTD{net_idx}_{sensor_idx}"
-            else:
-                base = f"NET{net_idx}_{sensor_idx}"
-            return _make_unique_name(base)
-
-        # Storage (HDD/SSD/NVMe)
-        elif "hdd" in device_lower or "ssd" in device_lower or "nvme" in device_lower:
-            drv_idx = "" if device_idx == "0" else device_idx
-            if "hdd" in device_lower:
-                prefix = f"HDD{drv_idx}"
-            elif "ssd" in device_lower:
-                prefix = f"SSD{drv_idx}"
-            else:
-                prefix = f"NVM{drv_idx}"
-
-            if sensor_type == "temperature":
-                base = f"{prefix}T"
-            elif sensor_type == "load":
-                base = f"{prefix}%"
-            elif sensor_type == "data":
-                base = f"{prefix}D"
-            else:
-                base = f"{prefix}_{sensor_idx}"
-            return _make_unique_name(base)
-
-    # Fallback: Create descriptive name from sensor_name + sensor_id
-    if sensor_name:
-        # Use first word of sensor name + type abbreviation
-        words = sensor_name.replace("-", " ").replace("_", " ").split()
-        if words:
-            base = words[0][:4].upper()
-            type_suffix = {"temperature": "T", "fan": "F", "load": "%",
-                          "power": "W", "voltage": "V", "clock": "C"}.get(sensor_type, "")
-            base = f"{base}{type_suffix}"
-            return _make_unique_name(base)
-
-    # Last resort fallback
-    if len(parts) >= 2:
-        device = parts[1].replace("-", "")[:4].upper()
-        return _make_unique_name(f"{device}{sensor_idx}")
-
-
-def check_wmi_connectivity():
-    """
-    Diagnostics: Check if LibreHardwareMonitor WMI namespace is accessible
-    Returns: (success, error_message, suggestion)
-    """
-    print("\n" + "-" * 60)
-    print("DIAGNOSTICS: Checking LibreHardwareMonitor connectivity...")
-    print("-" * 60)
-
-    # Check 1: Verify required modules are installed
-    print("\n[Check 1/4] Verifying required Python modules...")
-    try:
-        import wmi
-        print("  ✓ pywin32 and wmi modules are installed")
-    except ImportError as e:
-        missing = str(e).split("'")[1] if "'" in str(e) else "pywin32/wmi"
-        return False, f"Missing required module: {missing}", (
-            "FIX: Install required modules:\n"
-            "   pip install pywin32 wmi\n\n"
-            "   Or run: python -m pip install pywin32 wmi"
-        )
-
-    # Check 2: Verify LibreHardwareMonitor process is running
-    print("\n[Check 2/4] Checking if LibreHardwareMonitor is running...")
-    try:
-        import psutil
-        found_lhm = False
-        lhm_names = ["librehardwaremonitor", "libre hardware monitor",
-                     "hwmonitor", "hardware monitor"]
-        for proc in psutil.process_iter(['name']):
-            try:
-                proc_name = proc.info['name'].lower()
-                if any(name in proc_name for name in lhm_names):
-                    found_lhm = True
-                    print(f"  ✓ Found LibreHardwareMonitor process: {proc.info['name']}")
-                    break
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-
-        # Try to detect version if process is running
-        if found_lhm:
-            version = get_librehardwaremonitor_version()
-            if version:
-                print(f"  → Detected LibreHardwareMonitor version: {version}")
-                # Check for known problematic versions
-                version_parts = version.split('.')
-                if len(version_parts) >= 2:
-                    major = int(version_parts[0])
-                    minor = int(version_parts[1])
-                    # Version 0.9.5+ has known WMI issues
-                    if major == 0 and minor >= 9 and len(version_parts) >= 3:
-                        patch = int(version_parts[2])
-                        if patch >= 5:
-                            print("\n  ⚠⚠⚠ WARNING: LibreHardwareMonitor 0.9.5+ has BROKEN WMI support! ⚠⚠⚠")
-                            print("  → Version 0.9.5 introduced a bug that breaks WMI sensor reporting")
-                            print("  → See: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/issues/2088")
-                            print("  → RECOMMENDED: Downgrade to 0.9.4 from GitHub Releases page")
-            else:
-                print(f"  → Could not detect version (please report this)")
-
-        if not found_lhm:
-            return False, "LibreHardwareMonitor is not running", (
-                "FIX: Start LibreHardwareMonitor first\n\n"
-                "   1. Launch LibreHardwareMonitor\n"
-                "   2. IMPORTANT: Right-click and select 'Run as Administrator'\n"
-                "   3. Keep it running while using this script"
-            )
-    except Exception as e:
-        print(f"  ⚠ Could not check processes: {e}")
-
-    # Check 3: Auto-discover WMI namespace
-    print("\n[Check 3/4] Auto-discovering WMI namespace...")
-    global discovered_wmi_namespace
-
-    # Run auto-discovery
-    _found_namespaces, working_namespace = discover_wmi_namespaces()
-
-    if working_namespace:
-        # Update global namespace with the one that works
-        discovered_wmi_namespace = working_namespace
-        print(f"\n  → Using namespace: {working_namespace}")
-    else:
-        # Auto-discovery failed - likely LibreHardwareMonitor 0.9.5+ with broken WMI
-        # Try REST API fallback before giving up (LHM 0.9.5+ workaround)
-        print(f"\n  ⚠ No working WMI namespace found (LHM 0.9.5+ issue)")
-        print(f"  → Trying REST API fallback...")
-        print(f"  → Checking http://{rest_api_host}:{rest_api_port}/data.json")
-
-        global use_rest_api
-        rest_success, rest_count, rest_error = check_rest_api_connectivity(rest_api_host, rest_api_port)
-
-        # Debug: print REST API check result
-        if rest_error:
-            print(f"  ✗ REST API failed: {rest_error}")
-
-        if rest_success and rest_count > 0:
-            # REST API works! Use it instead of WMI
-            use_rest_api = True
-            print(f"\n  ✓✓✓ REST API WORKS! Using REST API instead of WMI ✓✓✓")
-            print(f"  → Found {rest_count} sensors via REST API")
-            print(f"  → This bypasses the WMI bug in LibreHardwareMonitor 0.9.5+")
-            print(f"  → Make sure 'Remote Web Server' is enabled in LibreHardwareMonitor")
-            print(f"     (Options → Remote Web Server → Run)")
-            # Skip remaining checks - REST API is working
-            return True, None, None
-
-        # REST API also failed - provide simplified troubleshooting
-        return False, "No working WMI namespace found", (
-            "FIX: LibreHardwareMonitor 0.9.5+ has broken WMI support.\n\n"
-            "SOLUTION (3 steps):\n\n"
-            "1. Enable REST API in LibreHardwareMonitor:\n"
-            "   Options → Remote Web Server → Run (port 8085)\n\n"
-            "2. If that doesn't work, downgrade to 0.9.4:\n"
-            "   https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases\n\n"
-            "3. If still failing, add Windows Defender exclusion:\n"
-            "   Add exclusion for LibreHardwareMonitor folder in Windows Security"
-        )
-
-    # Check 4: Verify we can actually read sensor data
-    print("\n[Check 4/4] Testing sensor data access...")
-    try:
-        import wmi
-        w = wmi.WMI(namespace=discovered_wmi_namespace)
-        sensors = list(w.Sensor())
-
-        if len(sensors) == 0:
-            # CRITICAL: Namespace exists but no sensors found
-            # Try REST API fallback before giving up (LHM 0.9.5+ workaround)
-            print(f"  ⚠ WMI returned 0 sensors - trying REST API fallback...")
-            print(f"  → Checking http://{rest_api_host}:{rest_api_port}/data.json")
-
-            rest_success, rest_count, rest_error = check_rest_api_connectivity(rest_api_host, rest_api_port)
-
-            if rest_success and rest_count > 0:
-                # REST API works! Use it instead of WMI
-                use_rest_api = True
-                print(f"\n  ✓✓✓ REST API WORKS! Using REST API instead of WMI ✓✓✓")
-                print(f"  → Found {rest_count} sensors via REST API")
-                print(f"  → This bypasses the WMI bug in LibreHardwareMonitor 0.9.5+")
-                print(f"  → Make sure 'Remote Web Server' is enabled in LibreHardwareMonitor")
-                print(f"     (Options → Remote Web Server → Run)")
-                return True, None, None
-
-            # REST API also failed - show comprehensive error with all options
-            error_msg = "WMI namespace accessible but contains 0 sensors!"
-            if rest_error:
-                error_msg += f"\nREST API also failed: {rest_error}"
-
-            return False, error_msg, (
-                "FIX: LibreHardwareMonitor driver is not providing sensor data.\n\n"
-                "SOLUTION (3 steps):\n\n"
-                "1. Enable REST API in LibreHardwareMonitor:\n"
-                "   Options → Remote Web Server → Run (port 8085)\n\n"
-                "2. If that doesn't work, downgrade to 0.9.4:\n"
-                "   https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases\n\n"
-                "3. If still failing, check for conflicts:\n"
-                "   Close HWiNFO64, HWMonitor, AIDA64, or add Windows Defender exclusion"
-            )
-
-        print(f"  ✓ Sensor data is readable ({len(sensors)} sensors found)")
-    except Exception as e:
-        return False, f"Cannot read sensor data: {e}", (
-            "FIX: Sensor access error\n\n"
-            "   This may be a permission issue.\n"
-            "   Try running both LibreHardwareMonitor and this script as Administrator."
-        )
-
-    print("\n" + "-" * 60)
-    print("✓ All diagnostics passed!")
-    print("-" * 60)
-    return True, None, None
-
-
-def print_troubleshooting_header(error_title):
-    """Print a formatted troubleshooting header"""
-    print("\n" + "!" * 60)
-    print(f"ERROR: {error_title}")
-    print("!" * 60)
-    print("\nTROUBLESHOOTING STEPS:")
-    print("-" * 60)
-
-
-def print_troubleshooting_footer():
-    """Print a formatted troubleshooting footer"""
-    print("-" * 60)
-    print("\nIf the problem persists, please share a screenshot of this")
-    print("entire error message when reporting the issue.")
-    print("\n" + "!" * 60 + "\n")
 
 
 def discover_sensors():
     """
-    Discover all available sensors from LibreHardwareMonitor and psutil
+    Discover all available sensors from native Python sources.
+    Populates the sensor_database dictionary.
     """
-    print("=" * 60)
-    print("PC STATS MONITOR v2.0 - SENSOR DISCOVERY")
-    print("=" * 60)
+    print("\nDiscovering sensors...")
 
-    # Add psutil system metrics
-    print("\n[1/2] Discovering system metrics (psutil)...")
+    # 1. psutil-based system metrics (always available)
+    _add_psutil_sensors()
 
-    # Warm up psutil for accurate readings
-    psutil.cpu_percent(interval=0.1)
+    # 2. GPU sensors (NVIDIA via pynvml, AMD via pyamdgpuinfo)
+    _add_gpu_sensors()
+
+    # 3. Network throughput sensors (psutil-based)
+    _add_net_sensors()
+
+    # 4. HWiNFO sensors (CPU temp, fans, voltages - optional)
+    _add_hwinfo_sensors()
+
+    # Print summary
+    total = sum(len(v) for v in sensor_database.values())
+    print(f"\n  Found {total} total sensors:")
+    for key, sensors in sensor_database.items():
+        if sensors:
+            print(f"    - {key}: {len(sensors)}")
+
+
+def _add_psutil_sensors():
+    """Add psutil-based system sensors."""
+    # CPU usage
+    psutil.cpu_percent(interval=0)  # Prime it
     sensor_database["system"].append({
         "name": "CPU",
         "display_name": "CPU Usage",
@@ -1053,9 +105,10 @@ def discover_sensors():
         "unit": "%",
         "psutil_method": "cpu_percent",
         "custom_label": "",
-        "current_value": int(psutil.cpu_percent(interval=0))
+        "current_value": 0,
     })
 
+    # RAM usage %
     sensor_database["system"].append({
         "name": "RAM",
         "display_name": "RAM Usage",
@@ -1064,344 +117,181 @@ def discover_sensors():
         "unit": "%",
         "psutil_method": "virtual_memory.percent",
         "custom_label": "",
-        "current_value": int(psutil.virtual_memory().percent)
+        "current_value": psutil.virtual_memory().percent,
     })
 
+    # RAM used (GB)
     sensor_database["system"].append({
         "name": "RAM_GB",
-        "display_name": "RAM Used (GB)",
+        "display_name": "RAM Used",
         "source": "psutil",
-        "type": "memory",
+        "type": "data",
         "unit": "GB",
         "psutil_method": "virtual_memory.used",
         "custom_label": "",
-        "current_value": int(psutil.virtual_memory().used / (1024**3))
+        "current_value": int(psutil.virtual_memory().used / (1024**3)),
     })
 
-    sensor_database["system"].append({
-        "name": "DISK",
-        "display_name": "Disk C: Usage",
-        "source": "psutil",
-        "type": "percent",
-        "unit": "%",
-        "psutil_method": "disk_usage",
-        "custom_label": "",
-        "current_value": int(psutil.disk_usage('C:\\').percent)
-    })
-
-    print(f"  Found {len(sensor_database['system'])} system metrics")
-
-    # Discover LibreHardwareMonitor sensors
-    print("\n[2/2] Discovering hardware sensors (LibreHardwareMonitor)...")
-
-    # Run diagnostics first to provide helpful error messages
-    success, error_msg, suggestion = check_wmi_connectivity()
-
-    if not success:
-        print_troubleshooting_header(error_msg)
-        print(suggestion)
-        print_troubleshooting_footer()
-        print("\n⚠ WARNING: Hardware sensors will NOT be available.")
-        print("  Only system metrics (CPU, RAM, Disk) can be monitored.")
-        print("\n  Press Enter to continue with system metrics only...")
-        input()
-        return
-
-    # Check if we should use REST API instead of WMI (LHM 0.9.5+ workaround)
-    if use_rest_api:
-        print("\n→ Using REST API for sensor discovery (LibreHardwareMonitor 0.9.5+ mode)")
-        if not discover_sensors_via_http(rest_api_host, rest_api_port):
-            print("\n⚠ REST API discovery failed. No hardware sensors available.")
-            print("  Only system metrics (CPU, RAM, Disk) can be monitored.")
-        print("\n" + "=" * 60)
-        return
-
-    # If diagnostics passed and not using REST API, proceed with WMI sensor discovery
+    # Disk usage %
     try:
-        import wmi
-        # Use the auto-discovered namespace
-        w = wmi.WMI(namespace=discovered_wmi_namespace)
-        sensors = w.Sensor()
+        sensor_database["system"].append({
+            "name": "DISK",
+            "display_name": "Disk Usage (C:\\)",
+            "source": "psutil",
+            "type": "percent",
+            "unit": "%",
+            "psutil_method": "disk_usage",
+            "custom_label": "",
+            "current_value": psutil.disk_usage('C:\\').percent,
+        })
+    except Exception:
+        pass
 
-        sensor_count = 0
-        # Reset name tracker to ensure fresh unique names
-        reset_generated_names()
 
-        for sensor in sensors:
-            # Generate short name for ESP32 display (using same function as REST API)
-            short_name = generate_short_name_from_id(sensor.Identifier, sensor.SensorType.lower(), sensor.Name)
+def _add_gpu_sensors():
+    """Add GPU sensors from gpu_sensor module."""
+    gpu_sensors = gpu_sensor.enumerate_gpu_sensors()
+    for sensor in gpu_sensors:
+        stype = sensor["type"]
+        if stype in sensor_database:
+            sensor_database[stype].append(sensor)
+        else:
+            sensor_database["other"].append(sensor)
 
-            # Enhance display name with identifier context for GUI
-            display_name = sensor.Name
-            identifier_parts = sensor.Identifier.split('/')
-            if len(identifier_parts) > 1:
-                device_info = identifier_parts[1]
-                # Add device context to display name for clarity
-                if device_info.lower() not in display_name.lower():
-                    display_name = f"{sensor.Name} [{device_info}]"
 
-                # Special handling for network data metrics (upload/download disambiguation)
-                if sensor.SensorType.lower() == "data" and ('nic' in device_info.lower() or 'network' in device_info.lower()):
-                    # Extract data metric index to distinguish upload/download
-                    # /nic/0/data/0 = Download, /nic/0/data/1 = Upload, etc.
-                    if len(identifier_parts) >= 4:
-                        data_index = identifier_parts[-1]
+def _add_net_sensors():
+    """Add network throughput sensors from net_monitor module."""
+    net_sensors = net_monitor.enumerate_net_sensors()
+    for sensor in net_sensors:
+        sensor_database["throughput"].append(sensor)
 
-                        # Check if name already has Upload/Download
-                        name_lower = sensor.Name.lower()
-                        if 'upload' not in name_lower and 'download' not in name_lower and 'rx' not in name_lower and 'tx' not in name_lower:
-                            # Add Upload/Download based on data index
-                            if data_index == '0':
-                                display_name = f"{sensor.Name} - Download [{device_info}]"
-                            elif data_index == '1':
-                                display_name = f"{sensor.Name} - Upload [{device_info}]"
-                            else:
-                                display_name = f"{sensor.Name} #{data_index} [{device_info}]"
 
-                # Special handling for network throughput metrics (upload/download disambiguation)
-                elif sensor.SensorType.lower() == "throughput" and ('nic' in device_info.lower() or 'network' in device_info.lower()):
-                    # Extract throughput metric index to distinguish upload/download
-                    # /nic/0/throughput/0 = Upload Speed, /nic/0/throughput/1 = Download Speed
-                    if len(identifier_parts) >= 4:
-                        throughput_index = identifier_parts[-1]
+def _add_hwinfo_sensors():
+    """Add HWiNFO sensors if available."""
+    hwinfo_sensors_list = hwinfo_sensor.enumerate_hwinfo_sensors()
+    for sensor in hwinfo_sensors_list:
+        stype = sensor["type"]
+        if stype in sensor_database:
+            sensor_database[stype].append(sensor)
+        else:
+            sensor_database["other"].append(sensor)
 
-                        # Check if name already has Upload/Download
-                        name_lower = sensor.Name.lower()
-                        if 'upload' not in name_lower and 'download' not in name_lower and 'rx' not in name_lower and 'tx' not in name_lower:
-                            # Add Upload/Download based on throughput index
-                            if throughput_index == '0':
-                                display_name = f"{sensor.Name} - Upload [{device_info}]"
-                            elif throughput_index == '1':
-                                display_name = f"{sensor.Name} - Download [{device_info}]"
-                            else:
-                                display_name = f"{sensor.Name} #{throughput_index} [{device_info}]"
 
-            # Get current sensor value
-            try:
-                current_value = int(sensor.Value) if sensor.Value else 0
-            except:
-                current_value = 0
+def _warmup_sensors():
+    """
+    Pre-warm all sensor sources to avoid first-call failures.
+    Initializes network throughput monitor and verifies GPU access.
+    """
+    # Initialize network throughput monitor and wait for first delta
+    net_monitor.initialize_net_monitor()
+    time.sleep(1.0)  # Wait for meaningful throughput delta
 
-            # Check if this is an active network interface (has traffic)
-            is_active_nic = False
-            sensor_type_lower = sensor.SensorType.lower()
-            if "nic" in sensor.Identifier.lower() and sensor_type_lower == "throughput":
-                if current_value > 0:
-                    is_active_nic = True
+    # Verify GPU access
+    gpu_sensor.get_gpu_count()
 
-            sensor_info = {
-                "name": short_name,
-                "display_name": display_name,
-                "source": "wmi",
-                "type": sensor_type_lower,
-                "unit": get_unit_from_type(sensor.SensorType),
-                "wmi_identifier": sensor.Identifier,
-                "wmi_sensor_name": sensor.Name,
-                "custom_label": "",
-                "current_value": current_value,
-                "is_active_nic": is_active_nic
-            }
+    # Verify we can actually read all configured metrics
+    psutil.cpu_percent(interval=0.5)
 
-            # Categorize sensor
-            if sensor_type_lower == "temperature":
-                sensor_database["temperature"].append(sensor_info)
-                sensor_count += 1
-            elif sensor_type_lower == "fan":
-                sensor_database["fan"].append(sensor_info)
-                sensor_count += 1
-            elif sensor_type_lower == "load":
-                sensor_database["load"].append(sensor_info)
-                sensor_count += 1
-            elif sensor_type_lower == "clock":
-                sensor_database["clock"].append(sensor_info)
-                sensor_count += 1
-            elif sensor_type_lower == "power":
-                sensor_database["power"].append(sensor_info)
-                sensor_count += 1
-            elif sensor_type_lower == "data":
-                sensor_database["data"].append(sensor_info)
-                sensor_count += 1
-            elif sensor_type_lower == "throughput":
-                sensor_database["throughput"].append(sensor_info)
-                sensor_count += 1
+
+def _sensor_key(sensor):
+    """Generate a unique key for any sensor regardless of source."""
+    # Backward compat: old configs may have wmi_identifier
+    if sensor.get("wmi_identifier"):
+        return sensor["wmi_identifier"]
+    # New sources
+    if sensor.get("gpu_method"):
+        return f"gpu_{sensor['gpu_method']}_{sensor.get('gpu_index', 0)}"
+    if sensor.get("hwinfo_sensor_name"):
+        return f"hwinfo_{sensor['hwinfo_sensor_name']}"
+    if sensor.get("net_method"):
+        return f"net_{sensor['net_method']}_{sensor.get('net_interface', '')}"
+    if sensor.get("psutil_method"):
+        return f"psutil_{sensor['psutil_method']}"
+    return f"{sensor['source']}_{sensor['display_name']}"
+
+
+def _migrate_old_config(config):
+    """
+    Migrate config from v2.x (LHM/WMI-based) to v3.x (native Python-based).
+    Converts wmi-source metrics to nvidia/net/psutil sources.
+    """
+    for metric in config.get("metrics", []):
+        if metric.get("source") != "wmi":
+            continue
+
+        wmi_id = metric.get("wmi_identifier", "").lower()
+        wmi_name = metric.get("wmi_sensor_name", "").lower()
+        sensor_type = metric.get("type", "").lower()
+
+        # GPU temperature
+        if "gpu-nvidia" in wmi_id and sensor_type == "temperature":
+            metric["source"] = "nvidia"
+            metric["gpu_method"] = "temp"
+            metric["gpu_index"] = 0
+            metric.pop("wmi_identifier", None)
+            metric.pop("wmi_sensor_name", None)
+            metric.pop("is_active_nic", None)
+            metric.pop("parent_hardware", None)
+
+        # GPU VRAM / load
+        elif "gpu-nvidia" in wmi_id and sensor_type == "load":
+            if "memory" in wmi_name or "vram" in wmi_name or "frame" in wmi_name:
+                metric["source"] = "nvidia"
+                metric["gpu_method"] = "vram_percent"
+                metric["gpu_index"] = 0
             else:
-                sensor_database["other"].append(sensor_info)
-                sensor_count += 1
+                metric["source"] = "nvidia"
+                metric["gpu_method"] = "load_percent"
+                metric["gpu_index"] = 0
+            metric.pop("wmi_identifier", None)
+            metric.pop("wmi_sensor_name", None)
+            metric.pop("is_active_nic", None)
+            metric.pop("parent_hardware", None)
 
-        print(f"  Found {sensor_count} hardware sensors:")
-        print(f"    - Temperatures: {len(sensor_database['temperature'])}")
-        print(f"    - Fans: {len(sensor_database['fan'])}")
-        print(f"    - Loads: {len(sensor_database['load'])}")
-        print(f"    - Clocks: {len(sensor_database['clock'])}")
-        print(f"    - Power: {len(sensor_database['power'])}")
-        print(f"    - Data: {len(sensor_database['data'])}")
-        print(f"    - Throughput: {len(sensor_database['throughput'])}")
-        if len(sensor_database['other']) > 0:
-            print(f"    - Other: {len(sensor_database['other'])}")
+        # Network throughput (download/upload)
+        elif "nic" in wmi_id and sensor_type == "throughput":
+            metric["source"] = "net"
+            metric["unit"] = "KB/s"
+            if "download" in wmi_name or "receive" in wmi_name:
+                metric["net_method"] = "download"
+            else:
+                metric["net_method"] = "upload"
+            # Auto-detect active network interface
+            metric["net_interface"] = "_auto_"
+            metric.pop("wmi_identifier", None)
+            metric.pop("wmi_sensor_name", None)
+            metric["is_active_nic"] = metric.get("is_active_nic", False)
 
-    except ImportError:
-        print("  WARNING: pywin32/wmi not installed. Hardware sensors unavailable.")
-        print("  Install with: pip install pywin32 wmi")
-    except Exception as e:
-        # Fallback error handling (should rarely trigger since diagnostics run first)
-        print_troubleshooting_header(f"Unexpected error during sensor discovery: {e}")
-        print("This error occurred after initial diagnostics passed.")
-        print("\nPossible causes:")
-        print("  - LibreHardwareMonitor was closed after diagnostics")
-        print("  - WMI connection was lost during sensor enumeration")
-        print("  - System resource limitation")
-        print("\nPlease try again:")
-        print("  1. Make sure LibreHardwareMonitor is running as Administrator")
-        print("  2. Restart this script")
-        print_troubleshooting_footer()
+        # GPU clock
+        elif "gpu-nvidia" in wmi_id and sensor_type == "clock":
+            metric["source"] = "nvidia"
+            metric["gpu_method"] = "clock_mhz"
+            metric["gpu_index"] = 0
+            metric.pop("wmi_identifier", None)
+            metric.pop("wmi_sensor_name", None)
 
-    print("\n" + "=" * 60)
-    print("\nℹ NOTE: Sensor values in GUI are static (captured at launch time)")
-    print("  This helps you identify active sensors and their typical readings.")
+        # GPU power
+        elif "gpu-nvidia" in wmi_id and sensor_type == "power":
+            metric["source"] = "nvidia"
+            metric["gpu_method"] = "power_watts"
+            metric["gpu_index"] = 0
+            metric.pop("wmi_identifier", None)
+            metric.pop("wmi_sensor_name", None)
 
+        # CPU temp (LHM WMI) - mark as unavailable
+        elif "intelcpu" in wmi_id or "amdcpu" in wmi_id:
+            if sensor_type == "temperature":
+                metric["source"] = "hwinfo"
+                metric["hwinfo_sensor_name"] = "CPU Package"
+                metric.pop("wmi_identifier", None)
+                metric.pop("wmi_sensor_name", None)
 
-def generate_short_name(full_name, sensor_type, identifier=""):
-    """
-    Generate a short name (max 10 chars) for ESP32 display with context
-    """
-    # Extract context from identifier path (e.g., /hdd/0/temperature/0 -> HDD0)
-    device_prefix = ""
-    device_index = ""
-
-    if identifier:
-        parts = identifier.split('/')
-        if len(parts) > 1:
-            device = parts[1].lower()
-
-            # CPU/GPU/Motherboard prefixes
-            if 'cpu' in device:
-                device_prefix = "CPU_"
-            elif 'gpu' in device or 'nvidia' in device or 'amd' in device:
-                device_prefix = "GPU_"
-            elif 'motherboard' in device or 'mainboard' in device:
-                device_prefix = "MB_"
-            # Storage devices (HDD, SSD, NVMe)
-            elif 'hdd' in device or 'storage' in device:
-                device_prefix = "HDD"
-                # Extract drive number if present (e.g., /hdd/0 -> HDD0)
-                if len(parts) > 2 and parts[2].isdigit():
-                    device_index = parts[2]
-            elif 'ssd' in device:
-                device_prefix = "SSD"
-                if len(parts) > 2 and parts[2].isdigit():
-                    device_index = parts[2]
-            elif 'nvme' in device:
-                device_prefix = "NVM"
-                if len(parts) > 2 and parts[2].isdigit():
-                    device_index = parts[2]
-            # Network adapters
-            elif 'nic' in device or 'network' in device or 'ethernet' in device:
-                device_prefix = "NET"
-                if len(parts) > 2 and parts[2].isdigit():
-                    device_index = parts[2]
-
-    # Keep the original name but clean it up
-    name = full_name.strip()
-
-    # For temperature sensors, add device prefix
-    if sensor_type.lower() == "temperature":
-        # Remove "Temperature" word
-        name = name.replace("Temperature", "").replace("temperature", "").strip()
-        # Add device prefix if not already there
-        if device_prefix and not name.upper().startswith(device_prefix.replace("_", "")):
-            name = device_prefix + device_index + "_" + name if device_index else device_prefix + name
-
-    # For fans, preserve numbers and context
-    elif sensor_type.lower() == "fan":
-        # Keep "Fan #1" as "FAN1", "Pump" as "PUMP", etc.
-        name = name.replace("Fan #", "FAN").replace("fan #", "FAN")
-        name = name.replace("Chassis", "CHS").replace("System", "SYS")
-
-    # For loads, add context
-    elif sensor_type.lower() == "load":
-        name = name.replace("Load", "").strip()
-        if device_prefix:
-            name = device_prefix + device_index + "_" + name if device_index else device_prefix + name
-
-    # For power
-    elif sensor_type.lower() == "power":
-        name = name.replace("Package", "PKG").replace("Power", "").strip()
-        if device_prefix:
-            name = device_prefix + device_index + "_" + name if device_index else device_prefix + name
-
-    # For data (network/disk usage)
-    elif sensor_type.lower() == "data":
-        name = name.replace("Data", "").strip()
-        if device_prefix:
-            name = device_prefix + device_index + "_" + name if device_index else device_prefix + name
-
-        # For network metrics, add Upload/Download suffix if not already in name
-        if device_prefix == "NET" and identifier:
-            parts = identifier.split('/')
-            name_lower = name.lower()
-            # Check if upload/download not already specified
-            if 'upload' not in name_lower and 'download' not in name_lower and 'u' not in name_lower.split('_')[-1] and 'd' not in name_lower.split('_')[-1]:
-                # Extract data metric index: /nic/0/data/0 = Download, /nic/0/data/1 = Upload
-                if len(parts) >= 4:
-                    data_index = parts[-1]
-                    if data_index == '0':
-                        name = name + "_D"  # Download
-                    elif data_index == '1':
-                        name = name + "_U"  # Upload
-
-    # For throughput (network speeds)
-    elif sensor_type.lower() == "throughput":
-        name = name.replace("Speed", "").strip()
-        if device_prefix:
-            name = device_prefix + device_index + "_" + name if device_index else device_prefix + name
-
-        # For network throughput, add Upload/Download suffix
-        if device_prefix == "NET" and identifier:
-            parts = identifier.split('/')
-            name_lower = name.lower()
-            # Check if upload/download not already specified
-            if 'upload' not in name_lower and 'download' not in name_lower and 'u' not in name_lower.split('_')[-1] and 'd' not in name_lower.split('_')[-1]:
-                # Extract throughput metric index: /nic/0/throughput/0 = Upload, /nic/0/throughput/1 = Download
-                if len(parts) >= 4:
-                    throughput_index = parts[-1]
-                    if throughput_index == '0':
-                        name = name + "_U"  # Upload
-                    elif throughput_index == '1':
-                        name = name + "_D"  # Download
-
-    # Clean up
-    name = name.replace("  ", " ").replace(" ", "_")
-
-    # Truncate if too long, but try to preserve meaning
-    if len(name) > 10:
-        # Remove underscores first to save space
-        name = name.replace("_", "")
-        if len(name) > 10:
-            name = name[:10]
-
-    return name if name else "SENSOR"
-
-
-def get_unit_from_type(sensor_type):
-    """
-    Map sensor type to display unit
-    """
-    unit_map = {
-        "Temperature": "C",
-        "Load": "%",
-        "Fan": "RPM",
-        "Clock": "MHz",
-        "Power": "W",
-        "Voltage": "V",
-        "Data": "GB",
-        "Throughput": "KB/s"  # Network throughput speeds
-    }
-    return unit_map.get(sensor_type, "")
+    return config
 
 
 def load_config():
     """
-    Load configuration from file with version checking
+    Load configuration from file with version checking and auto-migration.
     """
     if not os.path.exists(CONFIG_FILE):
         return None
@@ -1410,40 +300,26 @@ def load_config():
         with open(CONFIG_FILE, 'r') as f:
             config = json.load(f)
 
-        # Version check - force reconfiguration for old versions
         config_version = config.get("version", "1.0")
-        if config_version < "2.1":
-            print("\n" + "=" * 60)
-            print("  CONFIGURATION UPDATE REQUIRED")
-            print("=" * 60)
-            print(f"\n⚠ Configuration format updated (v{config_version} → v2.1)")
-            print("\nMajor bug fixes in this version:")
-            print("  ✓ Fixed duplicate metric names (HDDT, RAMUSED, etc.)")
-            print("  ✓ Fixed memory metrics appearing in wrong category")
-            print("  ✓ Removed companion markers (^^) from display")
-            print("  ✓ Custom labels now visible in preview")
-            print("  ✓ Improved GUI layout")
-            print("\n→ You will need to reconfigure your metrics in the GUI.")
+
+        if config_version < "3.0":
+            # Auto-migrate old config instead of forcing reconfiguration
+            print(f"\n  Migrating config from v{config_version} → v3.0...")
 
             # Backup old config
             backup_path = CONFIG_FILE.replace(".json", f"_v{config_version}_backup.json")
             try:
                 import shutil
                 shutil.copy(CONFIG_FILE, backup_path)
-                print(f"\n  Old config backed up to: {backup_path}")
+                print(f"  Old config backed up to: {backup_path}")
             except Exception as e:
-                print(f"\n  Warning: Could not backup config: {e}")
+                print(f"  Warning: Could not backup config: {e}")
 
-            # Delete old config to force reconfiguration
-            try:
-                os.remove(CONFIG_FILE)
-                print(f"  Old config removed: {CONFIG_FILE}")
-            except Exception as e:
-                print(f"  Warning: Could not remove old config: {e}")
-
-            print("\n" + "=" * 60 + "\n")
-            input("Press Enter to continue to configuration GUI...")
-            return None
+            # Migrate wmi-source metrics to new sources
+            config = _migrate_old_config(config)
+            config["version"] = "3.0"
+            save_config(config)
+            print("  Config migrated successfully!")
 
         print(f"\n✓ Loaded configuration from {CONFIG_FILE}")
         print(f"  Selected metrics: {len(config.get('metrics', []))}")
@@ -1487,15 +363,13 @@ def setup_autostart(enable=True):
         script_path = os.path.abspath(__file__)
 
         shortcut.TargetPath = python_exe
-        # Include 10s startup delay to wait for LibreHardwareMonitor to initialize
-        shortcut.Arguments = f'"{script_path}" --minimized --startup-delay 10'
+        shortcut.Arguments = f'"{script_path}" --minimized'
         shortcut.WorkingDirectory = os.path.dirname(script_path)
         shortcut.IconLocation = python_exe
         shortcut.save()
 
         print(f"\n✓ Autostart enabled!")
         print(f"  Shortcut created: {shortcut_path}")
-        print(f"  Startup delay: 10 seconds (waiting for LHM to start)")
         return True
     else:
         # Remove shortcut
@@ -1518,7 +392,7 @@ class MetricSelectorGUI:
     """
     def __init__(self, root, existing_config=None):
         self.root = root
-        self.root.title("PC Monitor v2.0 - Configuration")
+        self.root.title("PC Monitor v3.0 - Configuration")
         self.root.geometry("1200x800")
         self.root.resizable(False, False)
 
@@ -1792,8 +666,7 @@ class MetricSelectorGUI:
                 label_entry.bind("<KeyRelease>", lambda e: self.update_counter())
 
                 # Store reference to label entry and label frame
-                # Use wmi_identifier (sensor path) as key - most reliable and unique
-                sensor_key = sensor.get('wmi_identifier') or f"{sensor['source']}_{sensor['display_name']}"
+                sensor_key = _sensor_key(sensor)
                 self.label_entries[sensor_key] = {
                     'entry': label_entry,
                     'frame': label_frame
@@ -1867,35 +740,16 @@ class MetricSelectorGUI:
     def load_existing_metrics(self, metrics):
         """Load existing metric selections when editing config"""
         for metric in metrics:
-            # Find matching sensor and check it
             for cb, sensor, var, frame in self.checkboxes:
-                # Primary match: use wmi_identifier (sensor path) - most reliable
-                if sensor.get('wmi_identifier') and metric.get('wmi_identifier'):
-                    if sensor['wmi_identifier'] == metric['wmi_identifier']:
-                        match = True
-                    else:
-                        continue
-                else:
-                    # Fallback: match by source + display_name
-                    sensor_key = f"{sensor['source']}_{sensor['display_name']}"
-                    metric_key = f"{metric['source']}_{metric['display_name']}"
-                    match = (sensor_key == metric_key)
-
-                if match:
-                    # Explicitly add to selected_metrics (duplicate check in on_checkbox_toggle prevents double-adds)
+                sensor_k = _sensor_key(sensor)
+                metric_k = _sensor_key(metric)
+                if sensor_k == metric_k:
                     if sensor not in self.selected_metrics:
                         self.selected_metrics.append(sensor)
-
-                    # Set checkbox (this will trigger on_checkbox_toggle which handles showing label entry)
                     var.set(True)
-
-                    # Set custom label if exists - use wmi_identifier as key
-                    label_key = sensor.get('wmi_identifier') or f"{sensor['source']}_{sensor['display_name']}"
-                    if metric.get('custom_label') and label_key in self.label_entries:
-                        self.label_entries[label_key]['entry'].insert(0, metric['custom_label'])
+                    if metric.get('custom_label') and sensor_k in self.label_entries:
+                        self.label_entries[sensor_k]['entry'].insert(0, metric['custom_label'])
                     break
-
-        # Force update after all metrics loaded to ensure preview refreshes
         self.root.after(100, self.update_counter)
 
     def on_checkbox_toggle(self, sensor, var):
@@ -1918,11 +772,11 @@ class MetricSelectorGUI:
 
     def get_display_label_for_metric(self, sensor):
         """Get custom label if set, otherwise return sensor name"""
-        sensor_key = sensor.get('wmi_identifier') or f"{sensor['source']}_{sensor['display_name']}"
+        sensor_key = _sensor_key(sensor)
         if sensor_key in self.label_entries:
             custom = self.label_entries[sensor_key]['entry'].get().strip()
             if custom:
-                return custom[:10]  # Enforce 10 char limit
+                return custom[:10]
         return sensor['name']
 
     def update_counter(self):
@@ -2031,7 +885,7 @@ class MetricSelectorGUI:
 
         # Build config
         config = {
-            "version": "2.1",
+            "version": "3.0",
             "esp32_ip": esp_ip,
             "udp_port": udp_port,
             "update_interval": update_interval,
@@ -2044,11 +898,11 @@ class MetricSelectorGUI:
             metric_config["id"] = i + 1
 
             # Get custom label if set
-            sensor_key = sensor.get('wmi_identifier') or f"{sensor['source']}_{sensor['display_name']}"
+            sensor_key = _sensor_key(sensor)
             if sensor_key in self.label_entries:
                 custom_label = self.label_entries[sensor_key]['entry'].get().strip()
                 if custom_label:
-                    metric_config["custom_label"] = custom_label[:10]  # Max 10 chars
+                    metric_config["custom_label"] = custom_label[:10]
 
             config["metrics"].append(metric_config)
 
@@ -2061,59 +915,74 @@ class MetricSelectorGUI:
 
 def get_metric_value(metric_config):
     """
-    Get current value for a configured metric
+    Get current value for a configured metric from native Python sources.
 
-    Returns: int value on success, None on failure (for WMI/REST API sources)
+    Returns: int value on success, None on failure.
     """
     source = metric_config["source"]
 
     if source == "psutil":
         method = metric_config["psutil_method"]
-
         if method == "cpu_percent":
             return int(psutil.cpu_percent(interval=0))
         elif method == "virtual_memory.percent":
             return int(psutil.virtual_memory().percent)
         elif method == "virtual_memory.used":
-            return int(psutil.virtual_memory().used / (1024**3))  # GB
+            return int(psutil.virtual_memory().used / (1024**3))
         elif method == "disk_usage":
             return int(psutil.disk_usage('C:\\').percent)
 
-    elif source == "wmi":
-        # Check if we should use REST API instead (LHM 0.9.5+ workaround)
-        if use_rest_api:
-            # Skip HTTP requests when API is known to be down (avoids timeout delays)
-            if not lhm_health_monitor.is_healthy:
-                return None  # Use cached value instead of waiting for timeout
-            return get_metric_value_via_http(metric_config, rest_api_host, rest_api_port)
+    elif source in ("nvidia", "amd"):
+        # GPU sensors via pynvml / pyamdgpuinfo
+        method = metric_config.get("gpu_method")
+        gpu_idx = metric_config.get("gpu_index", 0)
+        if method == "temp":
+            val = gpu_sensor.get_gpu_temp(gpu_idx)
+        elif method == "vram_percent":
+            val = gpu_sensor.get_gpu_vram_percent(gpu_idx)
+        elif method == "vram_used_mb":
+            val = gpu_sensor.get_gpu_vram_used_mb(gpu_idx)
+        elif method == "clock_mhz":
+            val = gpu_sensor.get_gpu_clock_mhz(gpu_idx)
+        elif method == "load_percent":
+            val = gpu_sensor.get_gpu_load_percent(gpu_idx)
+        else:
+            return None
+        return int(val) if val is not None else None
 
-        # Use WMI for older LibreHardwareMonitor versions
-        try:
-            import wmi
-            w = wmi.WMI(namespace="root\\LibreHardwareMonitor")
-            identifier = metric_config["wmi_identifier"]
+    elif source == "hwinfo":
+        # HWiNFO shared memory reader
+        sensor_name = metric_config.get("hwinfo_sensor_name", "")
+        if not sensor_name:
+            return None
+        val, _ = hwinfo_sensor.get_sensor_value(sensor_name)
+        return int(val) if val is not None else None
 
-            sensors = w.Sensor(Identifier=identifier)
-            if sensors:
-                value = float(sensors[0].Value)
-                # For throughput: WMI returns B/s, convert to KB/s and multiply by 10
-                # ESP32 will divide by 10 when displaying
-                if metric_config.get("unit", "") == "KB/s":
-                    value = value / 1024  # B/s → KB/s
-                    value = value * 10    # Preserve 1 decimal place
-                return int(value)
-        except:
-            pass
-        return None  # WMI failed
+    elif source == "net":
+        # Network throughput via psutil deltas
+        method = metric_config.get("net_method")
+        iface = metric_config.get("net_interface")
+
+        # Auto-detect active interface if not specified
+        if not iface or iface == "_auto_":
+            real_ifaces = net_monitor.net_monitor.get_active_interfaces()
+            iface = real_ifaces[0] if real_ifaces else None
+
+        up_kbs, dn_kbs = net_monitor.get_net_throughput_kb_s(iface)
+        if method == "upload":
+            return int(up_kbs)
+        elif method == "download":
+            return int(dn_kbs)
+        return None
 
     return None
 
 
 # Status codes (must match ESP32 config.h)
 STATUS_OK = 1
-STATUS_API_ERROR = 2
-STATUS_LHM_NOT_RUNNING = 3
-STATUS_LHM_STARTING = 4
+STATUS_SENSOR_ERROR = 2
+STATUS_HWINFO_NOT_RUNNING = 3
+STATUS_STARTING = 4
 STATUS_UNKNOWN_ERROR = 5
 
 
@@ -2125,7 +994,7 @@ def send_metrics(sock, config, last_good_values=None, status_code=STATUS_OK):
         sock: UDP socket
         config: Configuration dictionary
         last_good_values: Dict to track last known good values per metric ID
-        status_code: LHM status code (1=OK, 2=API error, 3=LHM not running, etc.)
+        status_code: Sensor status code (1=OK, 2=Sensor error, 3=HWiNFO not running, etc.)
 
     Returns:
         Tuple of (success: bool, last_good_values: dict, has_fresh_data: bool)
@@ -2133,15 +1002,13 @@ def send_metrics(sock, config, last_good_values=None, status_code=STATUS_OK):
     if last_good_values is None:
         last_good_values = {}
 
-    # Track if we got any fresh data
     has_fresh_data = False
     stale_count = 0
 
-    # Build JSON payload with status code
     payload = {
-        "version": "2.2",
-        "status": status_code,  # LHM health status code
-        "timestamp": "",  # Will be set based on data freshness
+        "version": "3.0",
+        "status": status_code,
+        "timestamp": "",
         "metrics": []
     }
 
@@ -2150,15 +1017,12 @@ def send_metrics(sock, config, last_good_values=None, status_code=STATUS_OK):
         metric_id = metric_config["id"]
 
         if value is not None:
-            # Fresh data - update cache
             last_good_values[metric_id] = value
             has_fresh_data = True
         else:
-            # Stale data - use cached value if available
             value = last_good_values.get(metric_id, 0)
             stale_count += 1
 
-        # Use custom label if set, otherwise use generated name
         display_name = metric_config.get("custom_label", "")
         if not display_name:
             display_name = metric_config["name"]
@@ -2171,26 +1035,20 @@ def send_metrics(sock, config, last_good_values=None, status_code=STATUS_OK):
         }
         payload["metrics"].append(metric_data)
 
-    # Override status if data is stale (even if health monitor says OK)
-    # This catches the case where API starts failing but health monitor hasn't triggered yet
     total_metrics = len(config["metrics"])
     if total_metrics > 0 and stale_count >= total_metrics:
-        # All metrics are stale - definitely an API error
         if status_code == STATUS_OK:
-            status_code = STATUS_API_ERROR
+            status_code = STATUS_SENSOR_ERROR
         payload["status"] = status_code
     elif stale_count > 0 and stale_count >= total_metrics * 0.5:
-        # More than half metrics stale - likely API issue
         if status_code == STATUS_OK:
-            status_code = STATUS_API_ERROR
+            status_code = STATUS_SENSOR_ERROR
         payload["status"] = status_code
 
-    # Set timestamp only if we have fresh data
-    # Empty timestamp signals ESP32 that data may be stale
     if has_fresh_data:
         payload["timestamp"] = datetime.now().strftime('%H:%M')
     else:
-        payload["timestamp"] = ""  # Signal stale data to ESP32
+        payload["timestamp"] = ""
 
     # Send via UDP
     try:
@@ -2208,9 +1066,9 @@ def send_metrics(sock, config, last_good_values=None, status_code=STATUS_OK):
         # Status code indicator
         status_names = {
             STATUS_OK: "",
-            STATUS_API_ERROR: " [API ERR]",
-            STATUS_LHM_NOT_RUNNING: " [LHM DOWN]",
-            STATUS_LHM_STARTING: " [LHM STARTING]",
+            STATUS_SENSOR_ERROR: " [SENSOR ERR]",
+            STATUS_HWINFO_NOT_RUNNING: " [HWiNFO DOWN]",
+            STATUS_STARTING: " [STARTING]",
             STATUS_UNKNOWN_ERROR: " [ERROR]"
         }
         status_indicator = status_names.get(status_code, f" [STATUS:{status_code}]")
@@ -2241,8 +1099,7 @@ def create_tray_icon():
 
 
 def run_minimized(config):
-    """Run monitoring loop in background with system tray icon and LHM recovery"""
-    global lhm_health_monitor
+    """Run monitoring loop in background with system tray icon"""
 
     if not TRAY_AVAILABLE:
         print("\nWARNING: pystray not available, running in console mode")
@@ -2250,15 +1107,10 @@ def run_minimized(config):
         run_monitoring(config)
         return
 
-    # Create monitoring thread
     import threading
-
     stop_event = threading.Event()
 
     def monitoring_thread():
-        global lhm_health_monitor
-
-        # Initialize COM in this thread (required for WMI with pythonw.exe)
         if PYTHONCOM_AVAILABLE:
             try:
                 pythoncom.CoInitialize()
@@ -2266,37 +1118,54 @@ def run_minimized(config):
                 pass
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        # Warm up all sensor sources before sending first packet
         psutil.cpu_percent(interval=1)
+        _warmup_sensors()
 
         last_good_values = {}
-        last_lhm_check = time.time()
+        last_check = time.time()
+        warmup_done = False
+
+        # Send a primer packet first - verify all sensors work
+        print("Verifying sensor readings...")
+        primer_values = {}
+        all_valid = True
+        for mc in config["metrics"]:
+            v = get_metric_value(mc)
+            if v is None:
+                print(f"  ⚠ {mc['name']} ({mc['source']}) returned None")
+                all_valid = False
+            else:
+                primer_values[mc["id"]] = v
+                print(f"  ✓ {mc['name']} = {v} {mc['unit']}")
+
+        if all_valid:
+            # Send primer packet to ESP32 with confirmed-good values
+            send_metrics(sock, config, primer_values, STATUS_OK)
+            time.sleep(config["update_interval"])
+            warmup_done = True
+            print("All sensors verified. Starting main loop...")
+        else:
+            print("  ⚠ Some sensors not ready, starting anyway...")
 
         while not stop_event.is_set():
             current_time = time.time()
-
-            # Determine current status code based on health monitor state
             current_status = STATUS_OK
 
-            if use_rest_api and not lhm_health_monitor.is_healthy:
-                # Unhealthy - determine specific error status
-                if is_lhm_process_running():
-                    current_status = STATUS_API_ERROR
-                else:
-                    current_status = STATUS_LHM_NOT_RUNNING
+            if current_time - last_check >= 30:
+                last_check = current_time
+                has_hwinfo = any(m.get("source") == "hwinfo" for m in config["metrics"])
+                if has_hwinfo and not hwinfo_sensor.is_hwinfo_running():
+                    current_status = STATUS_HWINFO_NOT_RUNNING
 
-                # Try to recover periodically (every 5 seconds)
-                if current_time - last_lhm_check >= 5:
-                    last_lhm_check = current_time
-                    if is_lhm_process_running():
-                        success_check, count, _ = check_rest_api_connectivity(rest_api_host, rest_api_port)
-                        if success_check:
-                            lhm_health_monitor.record_success()
-                            current_status = STATUS_OK
-
-            # Send metrics with status code
             success, last_good_values, has_fresh = send_metrics(sock, config, last_good_values, current_status)
+            if has_fresh and not warmup_done:
+                warmup_done = True
+                # First successful packet sent - wait a bit so ESP32 has time to process
+                time.sleep(config["update_interval"])
+                continue
 
-            # Always use normal update interval to keep ESP32 alive
             time.sleep(config["update_interval"])
 
         sock.close()
@@ -2335,9 +1204,7 @@ def run_minimized(config):
 
 
 def run_monitoring(config):
-    """Run monitoring loop in console mode with LHM health monitoring and recovery"""
-    global lhm_health_monitor
-
+    """Run monitoring loop in console mode"""
     print(f"\nMonitoring {len(config['metrics'])} metrics:")
     for m in config["metrics"]:
         label_info = f" (Label: {m['custom_label']})" if m.get('custom_label') else ""
@@ -2346,56 +1213,46 @@ def run_monitoring(config):
     print(f"\nESP32 IP: {config['esp32_ip']}")
     print(f"UDP Port: {config['udp_port']}")
     print(f"Update Interval: {config['update_interval']}s")
-    print("\nStarting monitoring... (Press Ctrl+C to stop)\n")
+    print("\nWarming up sensors...")
+    _warmup_sensors()
+    print("Starting monitoring... (Press Ctrl+C to stop)\n")
 
-    # Create UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-    # Warm up psutil
     psutil.cpu_percent(interval=1)
 
-    # Initialize tracking variables
     last_good_values = {}
-    last_lhm_check = time.time()
+    last_check = time.time()
 
-    # Main monitoring loop with recovery logic
+    # Verify sensors before main loop
+    print("Verifying sensor readings...")
+    primer_values = {}
+    all_valid = True
+    for mc in config["metrics"]:
+        v = get_metric_value(mc)
+        if v is None:
+            print(f"  ⚠ {mc['name']} ({mc['source']}) returned None")
+            all_valid = False
+        else:
+            primer_values[mc["id"]] = v
+            print(f"  ✓ {mc['name']} = {v} {mc['unit']}")
+
+    if all_valid:
+        send_metrics(sock, config, primer_values, STATUS_OK)
+        time.sleep(config["update_interval"])
+        print("All sensors verified. Starting main loop...")
+
     try:
         while True:
             current_time = time.time()
-
-            # Determine current status code based on health monitor state
-            # (health state is updated during send_metrics -> get_metric_value calls)
             current_status = STATUS_OK
 
-            if use_rest_api and not lhm_health_monitor.is_healthy:
-                # Unhealthy - determine specific error status
-                if is_lhm_process_running():
-                    current_status = STATUS_API_ERROR
-                else:
-                    current_status = STATUS_LHM_NOT_RUNNING
+            if current_time - last_check >= 30:
+                last_check = current_time
+                has_hwinfo = any(m.get("source") == "hwinfo" for m in config["metrics"])
+                if has_hwinfo and not hwinfo_sensor.is_hwinfo_running():
+                    current_status = STATUS_HWINFO_NOT_RUNNING
 
-                # Try to recover periodically (every 5 seconds for quick feedback)
-                if current_time - last_lhm_check >= 5:
-                    last_lhm_check = current_time
-
-                    if is_lhm_process_running():
-                        # Process is running, try to reconnect
-                        success_check, count, _ = check_rest_api_connectivity(rest_api_host, rest_api_port)
-                        if success_check:
-                            print(f"\n  ✓ LHM REST API restored ({count} sensors available)")
-                            lhm_health_monitor.record_success()
-                            current_status = STATUS_OK
-                        else:
-                            if lhm_health_monitor.should_print_warning():
-                                print(f"  ⚠ LHM process found but REST API not responding")
-                    else:
-                        if lhm_health_monitor.should_print_warning():
-                            print("  ⚠ Waiting for LibreHardwareMonitor to restart...")
-
-            # Send metrics with status code (will use cached values if LHM is down)
             success, last_good_values, has_fresh = send_metrics(sock, config, last_good_values, current_status)
-
-            # Always use normal update interval to keep ESP32 alive
             time.sleep(config["update_interval"])
 
     except KeyboardInterrupt:
@@ -2408,30 +1265,19 @@ def main():
     """
     Main entry point
     """
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description='PC Stats Monitor v2.0')
+    parser = argparse.ArgumentParser(description='PC Stats Monitor v3.0 - Pure Python Hardware Monitoring')
     parser.add_argument('--configure', action='store_true', help='Force configuration GUI')
     parser.add_argument('--edit', action='store_true', help='Edit existing configuration')
     parser.add_argument('--autostart', choices=['enable', 'disable'], help='Enable/disable autostart')
     parser.add_argument('--minimized', action='store_true', help='Run minimized to system tray')
-    parser.add_argument('--startup-delay', type=int, default=0,
-                        help='Delay in seconds before starting (useful for autostart to wait for LHM)')
     args = parser.parse_args()
 
-    # Apply startup delay if specified (useful for Windows autostart)
-    if args.startup_delay > 0:
-        print(f"Waiting {args.startup_delay}s for system services to start...")
-        time.sleep(args.startup_delay)
-
-    # Initialize COM for WMI access (required when running with pythonw.exe / no console)
-    # Without this, WMI fails silently when launched from shortcuts
     if PYTHONCOM_AVAILABLE:
         try:
             pythoncom.CoInitialize()
         except Exception:
-            pass  # Already initialized or not needed
+            pass
 
-    # Handle autostart
     if args.autostart:
         try:
             success = setup_autostart(args.autostart == 'enable')
@@ -2444,8 +1290,8 @@ def main():
         return
 
     print("\n" + "=" * 60)
-    print("  PC STATS MONITOR v2.0")
-    print("  Dynamic Sensor Monitoring with GUI Configuration")
+    print("  PC STATS MONITOR v3.0")
+    print("  Pure Python - No LibreHardwareMonitor needed")
     print("=" * 60 + "\n")
 
     # Check for config file
@@ -2477,40 +1323,6 @@ def main():
         if config is None:
             print("\nNo configuration saved. Exiting.")
             return
-
-    # Validate config
-    if not config.get("metrics"):
-        print("\nNo metrics configured. Run with --edit to configure.")
-        return
-
-    # Initialize REST API detection if not already done (important for running without --edit)
-    global use_rest_api
-    if not use_rest_api:
-        print("Checking sensor connectivity...")
-
-        # Retry logic for startup - WMI can take longer to initialize than REST API
-        max_retries = 5 if args.minimized else 1  # More retries for autostart
-        retry_delay = 3  # seconds between retries
-
-        for attempt in range(max_retries):
-            # Try REST API first (for LHM 0.9.5+)
-            rest_success, rest_count, _ = check_rest_api_connectivity(rest_api_host, rest_api_port)
-            if rest_success and rest_count > 0:
-                use_rest_api = True
-                print(f"  ✓ Using REST API ({rest_count} sensors available)")
-                break
-            else:
-                # Try WMI (for LHM 0.9.4 and earlier)
-                wmi_success, wmi_error, _ = check_wmi_connectivity()
-                if wmi_success:
-                    print(f"  ✓ Using WMI")
-                    break
-                else:
-                    if attempt < max_retries - 1:
-                        print(f"  ⚠ Sensor source not ready, retrying in {retry_delay}s... ({attempt + 1}/{max_retries})")
-                        time.sleep(retry_delay)
-                    else:
-                        print("  ⚠ No sensor source available - will use psutil fallback")
 
     # Run monitoring (minimized or console)
     if args.minimized:

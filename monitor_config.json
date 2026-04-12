@@ -1,0 +1,67 @@
+{
+  "version": "3.0",
+  "esp32_ip": "192.168.1.162",
+  "udp_port": 4210,
+  "update_interval": 2.0,
+  "metrics": [
+    {
+      "name": "CPU",
+      "display_name": "CPU Usage",
+      "source": "psutil",
+      "type": "percent",
+      "unit": "%",
+      "psutil_method": "cpu_percent",
+      "custom_label": "",
+      "current_value": 0,
+      "id": 1
+    },
+    {
+      "name": "RAM",
+      "display_name": "RAM Usage",
+      "source": "psutil",
+      "type": "percent",
+      "unit": "%",
+      "psutil_method": "virtual_memory.percent",
+      "custom_label": "",
+      "current_value": 67,
+      "id": 2
+    },
+    {
+      "name": "GPUT",
+      "display_name": "GPU Core [gpu-nvidia]",
+      "source": "nvidia",
+      "type": "temperature",
+      "unit": "C",
+      "custom_label": "",
+      "current_value": 41,
+      "id": 3,
+      "gpu_method": "temp",
+      "gpu_index": 0
+    },
+    {
+      "name": "VRAM",
+      "display_name": "GPU Memory Controller [gpu-nvidia]",
+      "source": "nvidia",
+      "type": "load",
+      "unit": "%",
+      "custom_label": "",
+      "current_value": 5,
+      "id": 4,
+      "gpu_method": "vram_percent",
+      "gpu_index": 0
+    },
+    {
+      "name": "NET%7B2D2",
+      "display_name": "Download Speed [nic]",
+      "source": "net",
+      "type": "throughput",
+      "unit": "KB/s",
+      "custom_label": "",
+      "current_value": 966246,
+      "is_active_nic": true,
+      "id": 5,
+      "net_method": "download",
+      "net_interface": "_auto_"
+    }
+  ]
+}

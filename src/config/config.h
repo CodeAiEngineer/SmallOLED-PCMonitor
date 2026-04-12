@@ -36,10 +36,15 @@ struct Metric {
 
 // Status codes for PC monitor connection
 #define STATUS_OK 1
-#define STATUS_API_ERROR 2
-#define STATUS_LHM_NOT_RUNNING 3
-#define STATUS_LHM_STARTING 4
+#define STATUS_SENSOR_ERROR 2
+#define STATUS_HWINFO_NOT_RUNNING 3
+#define STATUS_STARTING 4
 #define STATUS_UNKNOWN_ERROR 5
+
+// Legacy aliases (for backward compat with old firmware)
+#define STATUS_API_ERROR STATUS_SENSOR_ERROR
+#define STATUS_LHM_NOT_RUNNING STATUS_HWINFO_NOT_RUNNING
+#define STATUS_LHM_STARTING STATUS_STARTING
 
 struct MetricData {
   Metric metrics[MAX_METRICS];
