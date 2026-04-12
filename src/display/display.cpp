@@ -113,7 +113,10 @@ void checkScheduledBrightness() {
   }
 }
 
-// Check if screen should be off based on schedule (weekdays 23:50-08:00, weekends 01:00-08:00)
+// Check if screen should be off based on schedule
+// Weekdays (Mon-Fri): Off 23:50-08:00
+// Weekend (Sat-Sun): Off 01:00-08:00
+// Sunday night -> Monday: Open until 01:00, then off 01:00-08:00
 bool isScreenScheduledOff() {
   // Get current time
   struct tm timeinfo;
@@ -128,25 +131,43 @@ bool isScreenScheduledOff() {
   // Convert current time to minutes since midnight for easier comparison
   uint16_t currentTimeInMinutes = currentHour * 60 + currentMinute;
 
-  // Weekdays (Monday=1 to Friday=5): Screen off from 23:50 to 08:00
+  // Monday to Friday (1-5): Screen off schedule
   if (currentDayOfWeek >= 1 && currentDayOfWeek <= 5) {
-    uint16_t weekdayOffStart = 23 * 60 + 50; // 23:50 = 1430 minutes
-    uint16_t weekdayOffEnd = 8 * 60;          // 08:00 = 480 minutes
-    
-    // Handle wrap-around (23:50 to midnight to 08:00)
-    if (currentTimeInMinutes >= weekdayOffStart || currentTimeInMinutes < weekdayOffEnd) {
-      return true;
+    // Monday: Off from 01:00-08:00 (Sunday night continuation) AND 23:50-00:00
+    // Tuesday-Friday: Off from 23:50-08:00
+    if (currentDayOfWeek == 1) {
+      // Monday: Off 01:00-08:00, also off 23:50-00:00
+      if ((currentTimeInMinutes >= 60 && currentTimeInMinutes < 480) ||
+          currentTimeInMinutes >= 1430) {
+        return true;
+      }
+    } else {
+      // Tuesday-Friday: Off 23:50-08:00
+      uint16_t weekdayOffStart = 23 * 60 + 50; // 23:50 = 1430 minutes
+      uint16_t weekdayOffEnd = 8 * 60;          // 08:00 = 480 minutes
+
+      // Handle wrap-around (23:50 to midnight to 08:00)
+      if (currentTimeInMinutes >= weekdayOffStart || currentTimeInMinutes < weekdayOffEnd) {
+        return true;
+      }
     }
   }
-  
-  // Weekends (Saturday=6, Sunday=0): Screen off from 01:00 to 08:00
-  if (currentDayOfWeek == 0 || currentDayOfWeek == 6) {
+
+  // Saturday (6): Screen off from 01:00 to 08:00
+  if (currentDayOfWeek == 6) {
     uint16_t weekendOffStart = 1 * 60;        // 01:00 = 60 minutes
     uint16_t weekendOffEnd = 8 * 60;          // 08:00 = 480 minutes
-    
+
     if (currentTimeInMinutes >= weekendOffStart && currentTimeInMinutes < weekendOffEnd) {
       return true;
     }
+  }
+
+  // Sunday (0): Screen open all day until Monday 01:00
+  // Screen off only from 01:00 to 08:00 on Monday morning
+  if (currentDayOfWeek == 0) {
+    // Sunday: Screen is OPEN all day (no off period)
+    return false;
   }
 
   return false;
