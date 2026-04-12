@@ -231,26 +231,20 @@ void drawWeather() {
     return;
   }
 
-  display.setTextSize(1);
   display.setTextColor(DISPLAY_WHITE);
 
-  int iconType = getWeatherIcon(weatherDesc);
-  drawWeatherIcon(iconType, 4, 4);
-
-  display.setCursor(24, 6);
-  display.print("Izmir");
-
-  display.setTextSize(3);
-  int tempWidth = weatherTemp.length() * 18;
-  display.setCursor(SCREEN_WIDTH - tempWidth - 4, 20);
+  // Temperature - HUGE, centered
+  display.setTextSize(4);
+  int tempWidth = weatherTemp.length() * 24;
+  int tempX = (SCREEN_WIDTH - tempWidth) / 2;
+  display.setCursor(tempX, 6);
   display.print(weatherTemp);
 
-  display.setCursor(24, SCREEN_HEIGHT - 10);
-  display.print(weatherDesc.length() > 0 ? weatherDesc : "Hava Durumu");
-
-  int barWidth = SCREEN_WIDTH - 8;
-  int progress = (int)((elapsed * 100) / WEATHER_DISPLAY_DURATION);
-  int fillWidth = (barWidth * progress) / 100;
-  display.drawFastHLine(4, 2, barWidth, DISPLAY_WHITE);
-  display.drawFastHLine(4, 3, fillWidth, DISPLAY_WHITE);
+  // Weather description - large, centered below temp
+  display.setTextSize(2);
+  const char* descText = weatherDesc.length() > 0 ? weatherDesc.c_str() : "Hava Durumu";
+  int descWidth = weatherDesc.length() > 0 ? weatherDesc.length() * 12 : 11 * 12;
+  int descX = (SCREEN_WIDTH - descWidth) / 2;
+  display.setCursor(descX, 44);
+  display.print(descText);
 }
