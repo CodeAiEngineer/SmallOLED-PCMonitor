@@ -18,11 +18,14 @@
 #define WEATHER_DISPLAY_DURATION 5000
 
 // Weather API URL (wttr.in - no API key needed)
-#define WEATHER_API_URL "http://wttr.in/Izmir,Konak?format=%t&lang=tr"
+// %t = temperature, %c = weather icon (Unicode), %C = weather description
+#define WEATHER_API_URL_TEMP "http://wttr.in/Izmir,Konak?format=%t&lang=tr"
+#define WEATHER_API_URL_DESC "http://wttr.in/Izmir,Konak?format=%C&lang=tr"
 
 // Weather state
 extern bool weatherAvailable;
 extern String weatherTemp;
+extern String weatherDesc;  // Weather description (e.g., "Sunny", "Rain")
 extern unsigned long lastWeatherUpdate;
 extern unsigned long weatherDisplayStart;
 extern bool weatherShowing;
