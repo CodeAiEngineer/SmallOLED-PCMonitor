@@ -1,7 +1,8 @@
 /*
  * SmallOLED-PCMonitor - Weather Module Implementation
  *
- * Simple state machine: FETCH -> SHOW (5s) -> WAIT (55s) -> repeat
+ * Non-blocking weather fetch using wttr.in API.
+ * Uses a single API call to get both temp and description.
  */
 
 #include "weather.h"
@@ -17,10 +18,11 @@ unsigned long lastWeatherUpdate = 0;
 unsigned long weatherDisplayStart = 0;
 bool weatherShowing = false;
 
-// Simple state machine: 0=fetch, 1=show, 2=wait
+// Simple state machine: 0=idle, 1=fetching, 2=show, 3=wait
 static int weatherState = 0;
+static unsigned long stateStartTime = 0;
 
-// Weather icon mapping based on description
+// Weather icon mapping
 int getWeatherIcon(String desc) {
   desc.toLowerCase();
   if (desc.indexOf("sun") >= 0 || desc.indexOf("clear") >= 0) return 0;
@@ -37,93 +39,105 @@ void initWeather() {
   lastWeatherUpdate = 0;
   weatherAvailable = false;
   weatherShowing = false;
-  weatherState = 0;  // Start with fetch
+  weatherState = 0;
   weatherDesc = "";
   Serial.println("Weather module initialized");
 }
 
 void updateWeather() {
-  // State 0: Fetch weather data
-  if (weatherState == 0) {
-    if (!wifiConnected) {
-      Serial.println("Weather: WiFi not connected, waiting...");
-      return;
-    }
-
-    Serial.println("Weather: Fetching data...");
-    
-    // Fetch temperature
-    HTTPClient http;
-    http.begin(WEATHER_API_URL_TEMP);
-    http.setTimeout(5000);
-    int httpCode = http.GET();
-    
-    if (httpCode == HTTP_CODE_OK) {
-      String payload = http.getString();
-      payload.trim();
-      if (payload.length() > 0 && payload.length() < 15) {
-        weatherTemp = payload;
-        weatherAvailable = true;
-        Serial.printf("Weather temp OK: %s\n", weatherTemp.c_str());
-      }
-    } else {
-      Serial.printf("Weather temp failed: HTTP %d\n", httpCode);
-    }
-    http.end();
-
-    // Fetch description if temp succeeded
-    if (weatherAvailable) {
-      HTTPClient httpDesc;
-      httpDesc.begin(WEATHER_API_URL_DESC);
-      httpDesc.setTimeout(5000);
-      int httpCodeDesc = httpDesc.GET();
-      if (httpCodeDesc == HTTP_CODE_OK) {
-        String descPayload = httpDesc.getString();
-        descPayload.trim();
-        if (descPayload.length() > 0 && descPayload.length() < 50) {
-          weatherDesc = descPayload;
-          Serial.printf("Weather desc OK: %s\n", weatherDesc.c_str());
-        }
-      }
-      httpDesc.end();
-    }
-
-    // Move to show state
-    if (weatherAvailable) {
-      weatherState = 1;
-      weatherDisplayStart = millis();
-      weatherShowing = true;
-      Serial.println("Weather: Moving to SHOW state");
-    } else {
-      // If fetch failed, wait 60s before retry
-      lastWeatherUpdate = millis();
-      weatherState = 2;
-      Serial.println("Weather: Fetch failed, moving to WAIT state");
-    }
+  if (!wifiConnected) {
+    weatherAvailable = false;
+    return;
   }
-  // State 2: Wait 60 seconds before next fetch
-  else if (weatherState == 2) {
-    unsigned long elapsed = millis() - lastWeatherUpdate;
-    if (elapsed >= WEATHER_UPDATE_INTERVAL) {
-      weatherState = 0;  // Go back to fetch
-      Serial.println("Weather: Wait complete, moving to FETCH state");
-    }
+
+  unsigned long now = millis();
+
+  switch (weatherState) {
+    case 0: // IDLE - Fetch weather
+      // Only fetch every 60 seconds
+      if (now - lastWeatherUpdate < WEATHER_UPDATE_INTERVAL) {
+        return;
+      }
+      
+      Serial.println("Weather: Fetching...");
+      {
+        // Use single API call with format: temp|desc
+        HTTPClient http;
+        http.begin("http://wttr.in/Izmir,Konak?format=%t|%C&lang=tr");
+        http.setTimeout(4000);
+        
+        int httpCode = http.GET();
+        if (httpCode == HTTP_CODE_OK) {
+          String payload = http.getString();
+          payload.trim();
+          
+          int pipeIndex = payload.indexOf('|');
+          if (pipeIndex > 0) {
+            weatherTemp = payload.substring(0, pipeIndex);
+            weatherDesc = payload.substring(pipeIndex + 1);
+            
+            if (weatherTemp.length() > 0 && weatherTemp.length() < 15 &&
+                weatherDesc.length() > 0 && weatherDesc.length() < 50) {
+              weatherAvailable = true;
+              Serial.printf("Weather OK: %s | %s\n", weatherTemp.c_str(), weatherDesc.c_str());
+              weatherState = 2;
+              stateStartTime = now;
+              weatherDisplayStart = now;
+              weatherShowing = true;
+              Serial.println("Weather: Moving to SHOW state");
+            } else {
+              Serial.println("Weather: Invalid data format");
+              weatherAvailable = false;
+              weatherState = 3;
+              stateStartTime = now;
+              lastWeatherUpdate = now;
+            }
+          } else {
+            Serial.printf("Weather: No pipe found, data: %s\n", payload.c_str());
+            weatherAvailable = false;
+            weatherState = 3;
+            stateStartTime = now;
+            lastWeatherUpdate = now;
+          }
+        } else {
+          Serial.printf("Weather: HTTP failed: %d\n", httpCode);
+          weatherAvailable = false;
+          weatherState = 3;
+          stateStartTime = now;
+          lastWeatherUpdate = now;
+        }
+        http.end();
+      }
+      break;
+      
+    case 2: // SHOW - Display weather (handled by drawWeather)
+      // Check if 5 seconds elapsed
+      if (now - weatherDisplayStart >= WEATHER_DISPLAY_DURATION) {
+        weatherShowing = false;
+        weatherState = 3;
+        stateStartTime = now;
+        Serial.println("Weather: Moving to WAIT state");
+      }
+      break;
+      
+    case 3: // WAIT - Wait 60 seconds before next fetch
+      if (now - stateStartTime >= WEATHER_UPDATE_INTERVAL) {
+        weatherState = 0;
+        Serial.println("Weather: Moving to FETCH state");
+      }
+      break;
   }
 }
 
 bool shouldShowWeather() {
-  // Only show if we're in show state and weather is available
-  if (weatherState == 1 && weatherAvailable && !weatherShowing) {
-    return true;
-  }
-  return false;
+  return (weatherState == 2 && weatherAvailable && !weatherShowing);
 }
 
 void startWeatherDisplay() {
   if (shouldShowWeather()) {
     weatherShowing = true;
     weatherDisplayStart = millis();
-    Serial.printf("Weather display started: %s\n", weatherTemp.c_str());
+    Serial.printf("Weather display: %s\n", weatherTemp.c_str());
   }
 }
 
@@ -151,7 +165,7 @@ void drawWeatherIcon(int iconType, int x, int y) {
       display.fillCircle(x + 12, y + 10, 3, DISPLAY_WHITE);
       display.fillRect(x + 7, y + 10, 8, 4, DISPLAY_WHITE);
       break;
-    case 2: // Cloudy/Overcast
+    case 2: // Cloudy
       display.fillCircle(x + 5, y + 7, 4, DISPLAY_WHITE);
       display.fillCircle(x + 11, y + 7, 4, DISPLAY_WHITE);
       display.fillCircle(x + 8, y + 6, 5, DISPLAY_WHITE);
@@ -166,7 +180,7 @@ void drawWeatherIcon(int iconType, int x, int y) {
       display.drawLine(x + 8, y + 11, x + 7, y + 15, DISPLAY_WHITE);
       display.drawLine(x + 12, y + 12, x + 11, y + 15, DISPLAY_WHITE);
       break;
-    case 4: // Thunder/Storm
+    case 4: // Storm
       display.fillCircle(x + 5, y + 4, 4, DISPLAY_WHITE);
       display.fillCircle(x + 11, y + 4, 4, DISPLAY_WHITE);
       display.fillCircle(x + 8, y + 3, 5, DISPLAY_WHITE);
@@ -204,39 +218,29 @@ void drawWeatherIcon(int iconType, int x, int y) {
 void drawWeather() {
   if (!weatherShowing || !displayAvailable) return;
 
-  // Check if display duration exceeded (5 seconds)
   unsigned long elapsed = millis() - weatherDisplayStart;
   if (elapsed > WEATHER_DISPLAY_DURATION) {
     weatherShowing = false;
-    weatherState = 2;  // Move to wait state
-    lastWeatherUpdate = millis();
-    Serial.println("Weather: Display finished, moving to WAIT state");
     return;
   }
 
-  // Draw weather info
   display.setTextSize(1);
   display.setTextColor(DISPLAY_WHITE);
 
-  // Draw weather icon (16x16) on the left
   int iconType = getWeatherIcon(weatherDesc);
   drawWeatherIcon(iconType, 4, 4);
 
-  // Location label (right side)
   display.setCursor(24, 6);
   display.print("Izmir");
 
-  // Temperature (large, centered right)
   display.setTextSize(3);
   int tempWidth = weatherTemp.length() * 18;
   display.setCursor(SCREEN_WIDTH - tempWidth - 4, 20);
   display.print(weatherTemp);
 
-  // Weather description at bottom
   display.setCursor(24, SCREEN_HEIGHT - 10);
   display.print(weatherDesc.length() > 0 ? weatherDesc : "Hava Durumu");
 
-  // Progress bar at top
   int barWidth = SCREEN_WIDTH - 8;
   int progress = (int)((elapsed * 100) / WEATHER_DISPLAY_DURATION);
   int fillWidth = (barWidth * progress) / 100;
