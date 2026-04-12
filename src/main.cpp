@@ -436,7 +436,7 @@ void loop() {
 
     display.clearDisplay();
 
-    // First check if goodnight sequence is running (23:50 weekdays)
+    // First check if goodnight sequence is running (23:45 weekdays)
     if (handleGoodnightSequence()) {
       // Goodnight sequence is running, it handles its own display updates
     }

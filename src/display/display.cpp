@@ -114,9 +114,9 @@ void checkScheduledBrightness() {
 }
 
 // Check if screen should be off based on schedule
-// Weekdays (Mon-Fri): Off 23:50-08:00
-// Weekend (Sat-Sun): Off 01:00-08:00
-// Sunday night -> Monday: Open until 01:00, then off 01:00-08:00
+// Weekdays (Mon-Fri): Off 23:45-08:00
+// Weekend (Sat-Sun): Off 01:00-13:00
+// Sunday night -> Monday: Open until 01:00, then off 01:00-13:00
 bool isScreenScheduledOff() {
   // Get current time
   struct tm timeinfo;
@@ -133,30 +133,30 @@ bool isScreenScheduledOff() {
 
   // Monday to Friday (1-5): Screen off schedule
   if (currentDayOfWeek >= 1 && currentDayOfWeek <= 5) {
-    // Monday: Off from 01:00-08:00 (Sunday night continuation) AND 23:50-00:00
-    // Tuesday-Friday: Off from 23:50-08:00
+    // Monday: Off from 01:00-13:00 (Sunday night continuation) AND 23:45-00:00
+    // Tuesday-Friday: Off from 23:45-13:00
     if (currentDayOfWeek == 1) {
-      // Monday: Off 01:00-08:00, also off 23:50-00:00
-      if ((currentTimeInMinutes >= 60 && currentTimeInMinutes < 480) ||
-          currentTimeInMinutes >= 1430) {
+      // Monday: Off 01:00-13:00, also off 23:45-00:00
+      if ((currentTimeInMinutes >= 60 && currentTimeInMinutes < 780) ||
+          currentTimeInMinutes >= 1425) {
         return true;
       }
     } else {
-      // Tuesday-Friday: Off 23:50-08:00
-      uint16_t weekdayOffStart = 23 * 60 + 50; // 23:50 = 1430 minutes
-      uint16_t weekdayOffEnd = 8 * 60;          // 08:00 = 480 minutes
+      // Tuesday-Friday: Off 23:45-13:00
+      uint16_t weekdayOffStart = 23 * 60 + 45; // 23:45 = 1425 minutes
+      uint16_t weekdayOffEnd = 13 * 60;         // 13:00 = 780 minutes
 
-      // Handle wrap-around (23:50 to midnight to 08:00)
+      // Handle wrap-around (23:45 to midnight to 13:00)
       if (currentTimeInMinutes >= weekdayOffStart || currentTimeInMinutes < weekdayOffEnd) {
         return true;
       }
     }
   }
 
-  // Saturday (6): Screen off from 01:00 to 08:00
+  // Saturday (6): Screen off from 01:00 to 13:00
   if (currentDayOfWeek == 6) {
     uint16_t weekendOffStart = 1 * 60;        // 01:00 = 60 minutes
-    uint16_t weekendOffEnd = 8 * 60;          // 08:00 = 480 minutes
+    uint16_t weekendOffEnd = 13 * 60;         // 13:00 = 780 minutes
 
     if (currentTimeInMinutes >= weekendOffStart && currentTimeInMinutes < weekendOffEnd) {
       return true;
@@ -187,11 +187,11 @@ bool handleGoodnightSequence() {
 
   uint16_t currentTimeInMinutes = currentHour * 60 + currentMinute;
 
-  // Check if we're at the goodnight trigger time (23:50 on weekdays)
+  // Check if we're at the goodnight trigger time (23:45 on weekdays)
   bool shouldTriggerGoodnight = false;
   if (currentDayOfWeek >= 1 && currentDayOfWeek <= 5) {
-    // Trigger at exactly 23:50-23:59
-    if (currentHour == 23 && currentMinute >= 50) {
+    // Trigger at exactly 23:45-23:59
+    if (currentHour == 23 && currentMinute >= 45) {
       shouldTriggerGoodnight = true;
     }
   }
