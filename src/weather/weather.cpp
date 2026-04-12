@@ -9,6 +9,7 @@
 #include "../display/display.h"
 #include "../config/config.h"
 #include <HTTPClient.h>
+#include <esp_task_wdt.h>
 
 // Weather state variables
 bool weatherAvailable = false;
@@ -61,12 +62,18 @@ void updateWeather() {
       
       Serial.println("Weather: Fetching...");
       {
+        // Reset watchdog before HTTP call to prevent boot loop
+        esp_task_wdt_reset();
+        
         // Use single API call with format: temp|desc
         HTTPClient http;
         http.begin("http://wttr.in/Izmir,Konak?format=%t|%C&lang=tr");
         http.setTimeout(4000);
         
         int httpCode = http.GET();
+        
+        // Reset watchdog after HTTP call too
+        esp_task_wdt_reset();
         if (httpCode == HTTP_CODE_OK) {
           String payload = http.getString();
           payload.trim();

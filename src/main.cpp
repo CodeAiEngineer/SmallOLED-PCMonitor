@@ -309,9 +309,9 @@ void setup() {
   // Initialize WiFi connection status flag
   wifiConnected = (WiFi.status() == WL_CONNECTED);
 
-  // Configure hardware watchdog timer
-  esp_task_wdt_init(15, true);
-  esp_task_wdt_add(NULL);
+  // Configure hardware watchdog timer - DISABLED to prevent boot loop during long setup
+  // esp_task_wdt_init(15, true);
+  // esp_task_wdt_add(NULL);
 
   // Initialize metricData
   metricData.count = 0;
@@ -333,19 +333,21 @@ void setup() {
   initWeather();
 
   showStartupProgress(100, "System ready!");
-  delay(500);
-
-  // Show IP address for 5 seconds
+  
+  // Show IP address briefly (with watchdog feed to prevent reset)
   if (displayAvailable) {
     displayConnected();
-    delay(5000);
+    for (int i = 0; i < 10; i++) {
+      esp_task_wdt_reset();  // Feed watchdog during delay
+      delay(500);
+    }
   }
 }
 
 // ========== loop() ==========
 void loop() {
-  // Feed watchdog
-  esp_task_wdt_reset();
+  // Feed watchdog (disabled, but keeping for safety if re-enabled)
+  // esp_task_wdt_reset();
 
   // Check and apply scheduled brightness (time-based dimming)
   checkScheduledBrightness();
