@@ -60,6 +60,8 @@ void setupWebServer() {
 // API endpoint to return current metrics as JSON
 void handleMetricsAPI() {
  String json = "{\"metrics\":[";
+ String timestamp = String(metricData.timestamp);
+ bool online = metricData.online;
 
  for (int i = 0; i < metricData.count; i++) {
  Metric& m = metricData.metrics[i];
@@ -68,6 +70,7 @@ void handleMetricsAPI() {
  json += "{\"id\":" + String(m.id) +
  ",\"name\":\"" + String(m.name) + "\"" +
  ",\"label\":\"" + String(m.label) + "\"" +
+ ",\"value\":" + String(m.value) +
  ",\"unit\":\"" + String(m.unit) + "\"" +
  ",\"displayOrder\":" + String(m.displayOrder) +
  ",\"companionId\":" + String(m.companionId) +
@@ -79,7 +82,9 @@ void handleMetricsAPI() {
  ",\"barOffsetX\":" + String(m.barOffsetX) + "}";
  }
 
- json += "]}";
+ json += "],\"timestamp\":\"" + timestamp + "\"" +
+ ",\"online\":" + String(online ? "true" : "false") +
+ "}";
 
  server.send(200, "application/json", json);
 }

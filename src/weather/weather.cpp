@@ -270,13 +270,27 @@ void drawWeather() {
     if (c == '-' && cleanTemp.length() == 0) cleanTemp += c;
   }
 
-  // Format: "10 - GUNESLI"
-  String weatherText = cleanTemp + " - " + getSimpleWeatherDesc(weatherDesc);
+  String condText = getSimpleWeatherDesc(weatherDesc);
 
-  // Center text, size 3
+  // Top: temperature big centered (size 3)
+  String tempStr = cleanTemp + "C";
   display.setTextSize(3);
-  int textWidth = weatherText.length() * 18;
-  int x = (SCREEN_WIDTH - textWidth) / 2;
-  display.setCursor(x, 20);
-  display.print(weatherText);
+  int tw = tempStr.length() * 18;
+  int tx = (SCREEN_WIDTH - tw) / 2;
+  if (tx < 0) tx = 0;
+  display.setCursor(tx, 4);
+  display.print(tempStr);
+  // Degree symbol
+  display.drawCircle(tx + cleanTemp.length() * 18 - 2, 2, 2, DISPLAY_WHITE);
+
+  // Separator
+  display.drawLine(0, 34, 128, 34, DISPLAY_WHITE);
+
+  // Bottom: condition centered (size 2)
+  display.setTextSize(2);
+  int cw = condText.length() * 12;
+  int cx = (SCREEN_WIDTH - cw) / 2;
+  if (cx < 0) cx = 0;
+  display.setCursor(cx, 44);
+  display.print(condText);
 }

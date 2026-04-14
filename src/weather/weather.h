@@ -12,10 +12,10 @@
 #include <HTTPClient.h>
 #include <WiFi.h>
 
-// Weather update interval (60 seconds)
-#define WEATHER_UPDATE_INTERVAL 60000
-// Weather display duration (14 seconds)
-#define WEATHER_DISPLAY_DURATION 14000
+// Weather update interval (35 seconds)
+#define WEATHER_UPDATE_INTERVAL 35000
+// Weather display duration (10 seconds)
+#define WEATHER_DISPLAY_DURATION 10000
 
 // Weather API URLs (wttr.in - no API key needed)
 #define WEATHER_API_URL_TEMP "http://wttr.in/Izmir,Konak?format=%t&lang=tr"

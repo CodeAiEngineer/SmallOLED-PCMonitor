@@ -232,8 +232,8 @@ def cleanup():
 
 # Initialize NVML at module load
 if NVML_AVAILABLE:
-    print(f"  ✓ NVIDIA NVML initialized ({_gpu_count} GPU(s) detected)")
+    print(f"  [OK] NVIDIA NVML initialized ({_gpu_count} GPU(s) detected)")
 if AMD_AVAILABLE:
-    print(f"  ✓ AMD GPU support initialized ({_amd_gpu_count} GPU(s) detected)")
+    print(f"  [OK] AMD GPU support initialized ({_amd_gpu_count} GPU(s) detected)")
 if not NVML_AVAILABLE and not AMD_AVAILABLE:
-    print("  ⚠ No GPU detected or GPU libraries not available")
+    print("  [WARN] No GPU detected or GPU libraries not available")

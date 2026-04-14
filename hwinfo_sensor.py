@@ -304,7 +304,7 @@ def is_hwinfo_running():
 
 # Initialize on module load
 if is_hwinfo_running():
-    print(f"  ✓ HWiNFO64 shared memory connected ({len(_hwinfo_data)} sensors)")
+    print(f"  [OK] HWiNFO64 shared memory connected ({len(_hwinfo_data)} sensors)")
 else:
-    print("  ⚠ HWiNFO64 not detected or shared memory not enabled")
+    print("  [WARN] HWiNFO64 not detected or shared memory not enabled")
     print("    Install HWiNFO64 and enable 'Shared Memory Support' in settings")

@@ -321,11 +321,11 @@ def load_config():
             save_config(config)
             print("  Config migrated successfully!")
 
-        print(f"\n✓ Loaded configuration from {CONFIG_FILE}")
+        print(f"\n[OK] Loaded configuration from {CONFIG_FILE}")
         print(f"  Selected metrics: {len(config.get('metrics', []))}")
         return config
     except Exception as e:
-        print(f"\n✗ Error loading config: {e}")
+        print(f"\n[ERR] Error loading config: {e}")
         return None
 
 
@@ -336,10 +336,10 @@ def save_config(config):
     try:
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config, f, indent=2)
-        print(f"\n✓ Configuration saved to {CONFIG_FILE}")
+        print(f"\n[OK] Configuration saved to {CONFIG_FILE}")
         return True
     except Exception as e:
-        print(f"\n✗ Error saving config: {e}")
+        print(f"\n[ERR] Error saving config: {e}")
         return False
 
 
@@ -368,18 +368,18 @@ def setup_autostart(enable=True):
         shortcut.IconLocation = python_exe
         shortcut.save()
 
-        print(f"\n✓ Autostart enabled!")
+        print(f"\n[OK] Autostart enabled!")
         print(f"  Shortcut created: {shortcut_path}")
         return True
     else:
         # Remove shortcut
         if os.path.exists(shortcut_path):
             os.remove(shortcut_path)
-            print(f"\n✓ Autostart disabled!")
+            print(f"\n[OK] Autostart disabled!")
             print(f"  Shortcut removed: {shortcut_path}")
             return True
         else:
-            print("\n✗ Autostart shortcut not found")
+            print("\n[WARN] Autostart shortcut not found")
             return False
 
 
@@ -815,9 +815,9 @@ class MetricSelectorGUI:
             startup_folder = winshell.startup()
             shortcut_path = os.path.join(startup_folder, "PC Monitor.lnk")
             if os.path.exists(shortcut_path):
-                return "✓ Enabled"
+                return "[OK] Enabled"
             else:
-                return "✗ Disabled"
+                return "[X] Disabled"
         except Exception:
             return "? Unknown"
 
@@ -1134,11 +1134,11 @@ def run_minimized(config):
         for mc in config["metrics"]:
             v = get_metric_value(mc)
             if v is None:
-                print(f"  ⚠ {mc['name']} ({mc['source']}) returned None")
+                print(f"  [WARN] {mc['name']} ({mc['source']}) returned None")
                 all_valid = False
             else:
                 primer_values[mc["id"]] = v
-                print(f"  ✓ {mc['name']} = {v} {mc['unit']}")
+                print(f"  [OK] {mc['name']} = {v} {mc['unit']}")
 
         if all_valid:
             # Send primer packet to ESP32 with confirmed-good values
@@ -1147,7 +1147,7 @@ def run_minimized(config):
             warmup_done = True
             print("All sensors verified. Starting main loop...")
         else:
-            print("  ⚠ Some sensors not ready, starting anyway...")
+            print("  [WARN] Some sensors not ready, starting anyway...")
 
         while not stop_event.is_set():
             current_time = time.time()
@@ -1183,12 +1183,14 @@ def run_minimized(config):
         icon.stop()
 
     def on_show_config(icon, item):
+        stop_event.set()
+        icon.stop()
         os.system(f'"{sys.executable}" "{os.path.abspath(__file__)}" --edit')
 
     icon = pystray.Icon(
         "pc_monitor",
         create_tray_icon(),
-        "PC Monitor",
+        "PC Monitor v3.0 - Running",
         menu=pystray.Menu(
             pystray.MenuItem("Configure", on_show_config),
             pystray.MenuItem("Quit", on_quit)
@@ -1199,8 +1201,12 @@ def run_minimized(config):
     thread = threading.Thread(target=monitoring_thread, daemon=True)
     thread.start()
 
-    # Run tray icon (blocking)
-    icon.run()
+    # Run tray icon (blocking) - this hides the window when run with pythonw.exe
+    try:
+        icon.run()
+    except KeyboardInterrupt:
+        stop_event.set()
+        icon.stop()
 
 
 def run_monitoring(config):
@@ -1230,11 +1236,11 @@ def run_monitoring(config):
     for mc in config["metrics"]:
         v = get_metric_value(mc)
         if v is None:
-            print(f"  ⚠ {mc['name']} ({mc['source']}) returned None")
+            print(f"  [WARN] {mc['name']} ({mc['source']}) returned None")
             all_valid = False
         else:
             primer_values[mc["id"]] = v
-            print(f"  ✓ {mc['name']} = {v} {mc['unit']}")
+            print(f"  [OK] {mc['name']} = {v} {mc['unit']}")
 
     if all_valid:
         send_metrics(sock, config, primer_values, STATUS_OK)
@@ -1285,7 +1291,7 @@ def main():
                 print("\nTIP: The script will run minimized to system tray on startup")
                 print("     Right-click the tray icon to configure or quit")
         except Exception as e:
-            print(f"\n✗ Error setting up autostart: {e}")
+            print(f"\n[ERR] Error setting up autostart: {e}")
             print("  Make sure pywin32 is installed: pip install pywin32")
         return
 
