@@ -148,6 +148,7 @@ void updateWeather() {
         unsigned long elapsed = now - weatherDisplayStart;
         if (elapsed >= WEATHER_DISPLAY_DURATION) {
           weatherShowing = false;
+          display.invertDisplay(false);
           weatherState = 3;
           stateStartTime = now;
           Serial.printf("Weather: Moving to WAIT state after %lums\n", elapsed);
@@ -256,7 +257,16 @@ void drawWeather() {
   unsigned long elapsed = millis() - weatherDisplayStart;
   if (elapsed > WEATHER_DISPLAY_DURATION) {
     weatherShowing = false;
+    display.invertDisplay(false);
     return;
+  }
+
+  // First 2 seconds: flash by toggling invert every 500ms
+  if (elapsed < 2000) {
+    bool inv = ((elapsed / 500) % 2) == 0;
+    display.invertDisplay(inv);
+  } else {
+    display.invertDisplay(true);
   }
 
   display.clearDisplay();
