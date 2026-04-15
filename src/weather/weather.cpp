@@ -1,14 +1,15 @@
 /*
  * SmallOLED-PCMonitor - Weather Module Implementation
  *
- * Non-blocking weather fetch using wttr.in API.
- * Uses a single API call to get both temp and description.
+ * Non-blocking weather fetch using Open-Meteo API (free, no key).
+ * Uses a single API call to get temperature and WMO weather code.
  */
 
 #include "weather.h"
 #include "../display/display.h"
 #include "../config/config.h"
 #include <HTTPClient.h>
+#include <ArduinoJson.h>
 #include <esp_task_wdt.h>
 
 // Weather state variables
@@ -18,6 +19,8 @@ String weatherDesc = "";
 unsigned long lastWeatherUpdate = 0;
 unsigned long weatherDisplayStart = 0;
 bool weatherShowing = false;
+bool clockOverlayShowing = false;
+static unsigned long clockOverlayStart = 0;
 
 // Simple state machine: 0=idle, 1=fetching, 2=show, 3=wait
 static int weatherState = 0;
@@ -40,25 +43,20 @@ String toAscii(String input) {
   return input;
 }
 
-// Map weather condition to simple Turkish word
-String getSimpleWeatherDesc(String desc) {
-  desc.toLowerCase();
-  // English conditions
-  if (desc.indexOf("sunny") >= 0 || desc.indexOf("clear") >= 0) return "GUNESLI";
-  if (desc.indexOf("partly cloudy") >= 0) return "AZ BULUTLU";
-  if (desc.indexOf("overcast") >= 0) return "KAPALI";
-  if (desc.indexOf("cloud") >= 0) return "BULUTLU";
-  if (desc.indexOf("rain") >= 0 || desc.indexOf("drizzle") >= 0) return "YAGMURLU";
-  if (desc.indexOf("thunder") >= 0 || desc.indexOf("storm") >= 0) return "SAGANAK";
-  if (desc.indexOf("snow") >= 0 || desc.indexOf("blizzard") >= 0) return "KARLI";
-  if (desc.indexOf("fog") >= 0 || desc.indexOf("mist") >= 0) return "SISLI";
-  // Turkish conditions (wttr.in lang=tr)
-  if (desc.indexOf("gunes") >= 0 || desc.indexOf("acik") >= 0) return "ACIK";
-  if (desc.indexOf("bulut") >= 0 || desc.indexOf("kapali") >= 0) return "BULUTLU";
-  if (desc.indexOf("yagmur") >= 0 || desc.indexOf("yagmurlu") >= 0) return "YAGMURLU";
-  if (desc.indexOf("kar") >= 0) return "KARLI";
-  if (desc.indexOf("sis") >= 0) return "SISLI";
-  return "ACIK";
+// Map WMO weather code to simple Turkish description
+String getWeatherDescFromCode(int code) {
+  if (code == 0) return "GUNESLI";
+  if (code == 1) return "AZ BULUTLU";
+  if (code == 2) return "BULUTLU";
+  if (code == 3) return "KAPALI";
+  if (code == 45 || code == 48) return "SISLI";
+  if (code >= 51 && code <= 57) return "CISELEYEN";
+  if (code >= 61 && code <= 67) return "YAGMURLU";
+  if (code >= 71 && code <= 77) return "KARLI";
+  if (code >= 80 && code <= 82) return "SAGANAK";
+  if (code >= 85 && code <= 86) return "KAR SAGANAK";
+  if (code >= 95 && code <= 99) return "FIRTINA";
+  return "GUNESLI";
 }
 
 void initWeather() {
@@ -85,47 +83,44 @@ void updateWeather() {
         return;
       }
       
-      Serial.println("Weather: Fetching...");
+      Serial.println("Weather: Fetching from Open-Meteo...");
       {
-        // Reset watchdog before HTTP call to prevent boot loop
         esp_task_wdt_reset();
-        
-        // Use single API call with format: temp|desc
+
         HTTPClient http;
-        http.begin("http://wttr.in/Izmir,Konak?format=%t|%C&lang=tr");
-        http.setTimeout(4000);
-        
+        // Open-Meteo: Izmir Konak coords (38.42, 27.14), get current temp + weather code
+        http.begin("http://api.open-meteo.com/v1/forecast?latitude=38.42&longitude=27.14&current=temperature_2m,weather_code");
+        http.setTimeout(5000);
+
         int httpCode = http.GET();
-        
-        // Reset watchdog after HTTP call too
         esp_task_wdt_reset();
+
         if (httpCode == HTTP_CODE_OK) {
           String payload = http.getString();
-          payload.trim();
-          
-          int pipeIndex = payload.indexOf('|');
-          if (pipeIndex > 0) {
-            weatherTemp = payload.substring(0, pipeIndex);
-            weatherDesc = payload.substring(pipeIndex + 1);
-            
-            if (weatherTemp.length() > 0 && weatherTemp.length() < 15 &&
-                weatherDesc.length() > 0 && weatherDesc.length() < 50) {
-              weatherAvailable = true;
-              Serial.printf("Weather OK: %s | %s\n", weatherTemp.c_str(), weatherDesc.c_str());
-              weatherState = 2;
-              stateStartTime = now;
-              weatherDisplayStart = now;
-              weatherShowing = true;
-              Serial.println("Weather: Moving to SHOW state");
-            } else {
-              Serial.println("Weather: Invalid data format");
-              weatherAvailable = false;
-              weatherState = 3;
-              stateStartTime = now;
-              lastWeatherUpdate = now;
-            }
+
+          JsonDocument doc;
+          DeserializationError err = deserializeJson(doc, payload);
+
+          if (!err && doc["current"].is<JsonObject>()) {
+            float temp = doc["current"]["temperature_2m"];
+            int wmoCode = doc["current"]["weather_code"];
+
+            // Round temperature to integer
+            int tempInt = (int)(temp + 0.5f);
+            if (temp < 0) tempInt = (int)(temp - 0.5f);
+
+            weatherTemp = String(tempInt);
+            weatherDesc = getWeatherDescFromCode(wmoCode);
+
+            weatherAvailable = true;
+            Serial.printf("Weather OK: %d°C | %s (WMO:%d)\n", tempInt, weatherDesc.c_str(), wmoCode);
+            weatherState = 2;
+            stateStartTime = now;
+            weatherDisplayStart = now;
+            weatherShowing = true;
+            Serial.println("Weather: Moving to SHOW state");
           } else {
-            Serial.printf("Weather: No pipe found, data: %s\n", payload.c_str());
+            Serial.printf("Weather: JSON parse error: %s\n", err.c_str());
             weatherAvailable = false;
             weatherState = 3;
             stateStartTime = now;
@@ -149,14 +144,30 @@ void updateWeather() {
         if (elapsed >= WEATHER_DISPLAY_DURATION) {
           weatherShowing = false;
           display.invertDisplay(false);
-          weatherState = 3;
+          // Transition to fullscreen clock phase
+          weatherState = 4;
+          clockOverlayStart = now;
+          clockOverlayShowing = true;
           stateStartTime = now;
-          Serial.printf("Weather: Moving to WAIT state after %lums\n", elapsed);
+          Serial.printf("Weather: Moving to CLOCK state after %lums\n", elapsed);
         }
       }
       break;
-      
-    case 3: // WAIT - Wait 60 seconds before next fetch
+
+    case 4: // CLOCK - Show fullscreen clock after weather
+      {
+        unsigned long elapsed = now - clockOverlayStart;
+        if (elapsed >= CLOCK_OVERLAY_DURATION) {
+          clockOverlayShowing = false;
+          weatherState = 3;
+          stateStartTime = now;
+          lastWeatherUpdate = now;
+          Serial.printf("Clock overlay: Moving to WAIT state after %lums\n", elapsed);
+        }
+      }
+      break;
+
+    case 3: // WAIT - Wait before next fetch cycle
       if (now - stateStartTime >= WEATHER_UPDATE_INTERVAL) {
         weatherState = 0;
         Serial.println("Weather: Moving to FETCH state");
@@ -251,6 +262,39 @@ void drawWeatherIcon(int iconType, int x, int y) {
   }
 }
 
+bool isClockOverlayShowing() {
+  return clockOverlayShowing;
+}
+
+void drawClockOverlay() {
+  if (!clockOverlayShowing || !displayAvailable) return;
+
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 10)) return;
+
+  display.clearDisplay();
+  display.setTextColor(DISPLAY_WHITE);
+
+  // Large time - size 4 (fills screen nicely)
+  display.setTextSize(4);
+  char timeStr[6];
+  // Blink colon every second
+  char sep = (timeinfo.tm_sec % 2 == 0) ? ':' : ' ';
+  sprintf(timeStr, "%02d%c%02d", timeinfo.tm_hour, sep, timeinfo.tm_min);
+
+  int time_x = (SCREEN_WIDTH - 120) / 2;  // 5 chars * 24px = 120
+  display.setCursor(time_x, 4);
+  display.print(timeStr);
+
+  // Date at bottom
+  display.setTextSize(1);
+  char dateStr[12];
+  sprintf(dateStr, "%02d/%02d/%04d", timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900);
+  int date_x = (SCREEN_WIDTH - 60) / 2;
+  display.setCursor(date_x, 54);
+  display.print(dateStr);
+}
+
 void drawWeather() {
   if (!weatherShowing || !displayAvailable) return;
 
@@ -272,15 +316,9 @@ void drawWeather() {
   display.clearDisplay();
   display.setTextColor(DISPLAY_WHITE);
 
-  // Parse temperature: keep only digits and minus sign
-  String cleanTemp = "";
-  for (int i = 0; i < weatherTemp.length(); i++) {
-    char c = weatherTemp.charAt(i);
-    if (c >= '0' && c <= '9') cleanTemp += c;
-    if (c == '-' && cleanTemp.length() == 0) cleanTemp += c;
-  }
-
-  String condText = getSimpleWeatherDesc(weatherDesc);
+  // weatherTemp is already clean integer string from Open-Meteo
+  String cleanTemp = weatherTemp;
+  String condText = weatherDesc;
 
   // Top: temperature big centered (size 3)
   String tempStr = cleanTemp + "C";

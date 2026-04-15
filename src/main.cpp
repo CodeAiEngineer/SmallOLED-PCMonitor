@@ -446,13 +446,15 @@ void loop() {
       display.clearDisplay();
       display.display();
     } else {
-      // Check if we should show weather (5 seconds every 60 seconds)
+      // Check if we should show weather
       if (shouldShowWeather() && !weatherShowing) {
         startWeatherDisplay();
       }
-      
+
       if (weatherShowing) {
         drawWeather();
+      } else if (clockOverlayShowing) {
+        drawClockOverlay();
       } else {
   #if TOUCH_BUTTON_ENABLED
         bool showStats = metricData.online && !manualClockMode;
