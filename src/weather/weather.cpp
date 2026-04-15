@@ -21,8 +21,9 @@ unsigned long weatherDisplayStart = 0;
 bool weatherShowing = false;
 bool clockOverlayShowing = false;
 static unsigned long clockOverlayStart = 0;
+static bool showClockNext = false;  // Alternate: false=weather, true=clock
 
-// Simple state machine: 0=idle, 1=fetching, 2=show, 3=wait
+// Simple state machine: 0=idle, 2=show weather, 3=wait, 4=show clock
 static int weatherState = 0;
 static unsigned long stateStartTime = 0;
 
@@ -77,84 +78,89 @@ void updateWeather() {
   unsigned long now = millis();
 
   switch (weatherState) {
-    case 0: // IDLE - Fetch weather
-      // Only fetch every 60 seconds
+    case 0: // IDLE - Decide: show weather or clock (alternating)
       if (now - lastWeatherUpdate < WEATHER_UPDATE_INTERVAL) {
         return;
       }
-      
-      Serial.println("Weather: Fetching from Open-Meteo...");
-      {
-        esp_task_wdt_reset();
 
-        HTTPClient http;
-        // Open-Meteo: Izmir Konak coords (38.42, 27.14), get current temp + weather code
-        http.begin("http://api.open-meteo.com/v1/forecast?latitude=38.42&longitude=27.14&current=temperature_2m,weather_code");
-        http.setTimeout(5000);
+      if (showClockNext) {
+        // Clock turn - show fullscreen clock directly
+        showClockNext = false;
+        clockOverlayStart = now;
+        clockOverlayShowing = true;
+        weatherState = 4;
+        stateStartTime = now;
+        Serial.println("Cycle: Showing CLOCK");
+      } else {
+        // Weather turn - fetch and show
+        showClockNext = true;
+        Serial.println("Cycle: Fetching weather from Open-Meteo...");
+        {
+          esp_task_wdt_reset();
 
-        int httpCode = http.GET();
-        esp_task_wdt_reset();
+          HTTPClient http;
+          http.begin("http://api.open-meteo.com/v1/forecast?latitude=38.42&longitude=27.14&current=temperature_2m,weather_code");
+          http.setTimeout(5000);
 
-        if (httpCode == HTTP_CODE_OK) {
-          String payload = http.getString();
+          int httpCode = http.GET();
+          esp_task_wdt_reset();
 
-          JsonDocument doc;
-          DeserializationError err = deserializeJson(doc, payload);
+          if (httpCode == HTTP_CODE_OK) {
+            String payload = http.getString();
 
-          if (!err && doc["current"].is<JsonObject>()) {
-            float temp = doc["current"]["temperature_2m"];
-            int wmoCode = doc["current"]["weather_code"];
+            JsonDocument doc;
+            DeserializationError err = deserializeJson(doc, payload);
 
-            // Round temperature to integer
-            int tempInt = (int)(temp + 0.5f);
-            if (temp < 0) tempInt = (int)(temp - 0.5f);
+            if (!err && doc["current"].is<JsonObject>()) {
+              float temp = doc["current"]["temperature_2m"];
+              int wmoCode = doc["current"]["weather_code"];
 
-            weatherTemp = String(tempInt);
-            weatherDesc = getWeatherDescFromCode(wmoCode);
+              int tempInt = (int)(temp + 0.5f);
+              if (temp < 0) tempInt = (int)(temp - 0.5f);
 
-            weatherAvailable = true;
-            Serial.printf("Weather OK: %d°C | %s (WMO:%d)\n", tempInt, weatherDesc.c_str(), wmoCode);
-            weatherState = 2;
-            stateStartTime = now;
-            weatherDisplayStart = now;
-            weatherShowing = true;
-            Serial.println("Weather: Moving to SHOW state");
+              weatherTemp = String(tempInt);
+              weatherDesc = getWeatherDescFromCode(wmoCode);
+
+              weatherAvailable = true;
+              Serial.printf("Weather OK: %d°C | %s (WMO:%d)\n", tempInt, weatherDesc.c_str(), wmoCode);
+              weatherState = 2;
+              stateStartTime = now;
+              weatherDisplayStart = now;
+              weatherShowing = true;
+            } else {
+              Serial.printf("Weather: JSON parse error: %s\n", err.c_str());
+              weatherAvailable = false;
+              weatherState = 3;
+              stateStartTime = now;
+              lastWeatherUpdate = now;
+            }
           } else {
-            Serial.printf("Weather: JSON parse error: %s\n", err.c_str());
+            Serial.printf("Weather: HTTP failed: %d\n", httpCode);
             weatherAvailable = false;
             weatherState = 3;
             stateStartTime = now;
             lastWeatherUpdate = now;
           }
-        } else {
-          Serial.printf("Weather: HTTP failed: %d\n", httpCode);
-          weatherAvailable = false;
-          weatherState = 3;
-          stateStartTime = now;
-          lastWeatherUpdate = now;
+          http.end();
         }
-        http.end();
       }
       break;
-      
-    case 2: // SHOW - Display weather (handled by drawWeather)
-      // Check if display duration elapsed
+
+    case 2: // SHOW - Display weather (10s)
       {
         unsigned long elapsed = now - weatherDisplayStart;
         if (elapsed >= WEATHER_DISPLAY_DURATION) {
           weatherShowing = false;
           display.invertDisplay(false);
-          // Transition to fullscreen clock phase
-          weatherState = 4;
-          clockOverlayStart = now;
-          clockOverlayShowing = true;
+          weatherState = 3;
           stateStartTime = now;
-          Serial.printf("Weather: Moving to CLOCK state after %lums\n", elapsed);
+          lastWeatherUpdate = now;
+          Serial.printf("Weather: Done after %lums\n", elapsed);
         }
       }
       break;
 
-    case 4: // CLOCK - Show fullscreen clock after weather
+    case 4: // CLOCK - Show fullscreen clock (10s)
       {
         unsigned long elapsed = now - clockOverlayStart;
         if (elapsed >= CLOCK_OVERLAY_DURATION) {
@@ -162,15 +168,15 @@ void updateWeather() {
           weatherState = 3;
           stateStartTime = now;
           lastWeatherUpdate = now;
-          Serial.printf("Clock overlay: Moving to WAIT state after %lums\n", elapsed);
+          Serial.printf("Clock: Done after %lums\n", elapsed);
         }
       }
       break;
 
-    case 3: // WAIT - Wait before next fetch cycle
+    case 3: // WAIT - Wait 80s before next cycle (90s total - 10s display)
       if (now - stateStartTime >= WEATHER_UPDATE_INTERVAL) {
         weatherState = 0;
-        Serial.println("Weather: Moving to FETCH state");
+        Serial.println("Cycle: Ready for next display");
       }
       break;
   }
@@ -286,12 +292,13 @@ void drawClockOverlay() {
   display.setCursor(time_x, 4);
   display.print(timeStr);
 
-  // Date at bottom
-  display.setTextSize(1);
+  // Date at bottom - size 2 for readability
+  display.setTextSize(2);
   char dateStr[12];
-  sprintf(dateStr, "%02d/%02d/%04d", timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900);
-  int date_x = (SCREEN_WIDTH - 60) / 2;
-  display.setCursor(date_x, 54);
+  sprintf(dateStr, "%02d/%02d", timeinfo.tm_mday, timeinfo.tm_mon + 1);
+  int date_w = strlen(dateStr) * 12;  // size 2 = 12px per char
+  int date_x = (SCREEN_WIDTH - date_w) / 2;
+  display.setCursor(date_x, 48);
   display.print(dateStr);
 }
 
