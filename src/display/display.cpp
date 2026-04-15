@@ -131,43 +131,21 @@ bool isScreenScheduledOff() {
   // Convert current time to minutes since midnight for easier comparison
   uint16_t currentTimeInMinutes = currentHour * 60 + currentMinute;
 
-  // Monday to Friday (1-5): Screen off schedule
+  // Monday to Friday (1-5): Screen off 23:45-08:00
   if (currentDayOfWeek >= 1 && currentDayOfWeek <= 5) {
-    // Monday: Off from 01:00-13:00 (Sunday night continuation) AND 23:45-00:00
-    // Tuesday-Friday: Off from 23:45-13:00
-    if (currentDayOfWeek == 1) {
-      // Monday: Off 01:00-13:00, also off 23:45-00:00
-      if ((currentTimeInMinutes >= 60 && currentTimeInMinutes < 780) ||
-          currentTimeInMinutes >= 1425) {
-        return true;
-      }
-    } else {
-      // Tuesday-Friday: Off 23:45-13:00
-      uint16_t weekdayOffStart = 23 * 60 + 45; // 23:45 = 1425 minutes
-      uint16_t weekdayOffEnd = 13 * 60;         // 13:00 = 780 minutes
+    uint16_t weekdayOffStart = 23 * 60 + 45; // 23:45 = 1425 minutes
+    uint16_t weekdayOffEnd = 8 * 60;          // 08:00 = 480 minutes
 
-      // Handle wrap-around (23:45 to midnight to 13:00)
-      if (currentTimeInMinutes >= weekdayOffStart || currentTimeInMinutes < weekdayOffEnd) {
-        return true;
-      }
-    }
-  }
-
-  // Saturday (6): Screen off from 01:00 to 13:00
-  if (currentDayOfWeek == 6) {
-    uint16_t weekendOffStart = 1 * 60;        // 01:00 = 60 minutes
-    uint16_t weekendOffEnd = 13 * 60;         // 13:00 = 780 minutes
-
-    if (currentTimeInMinutes >= weekendOffStart && currentTimeInMinutes < weekendOffEnd) {
+    if (currentTimeInMinutes >= weekdayOffStart || currentTimeInMinutes < weekdayOffEnd) {
       return true;
     }
   }
 
-  // Sunday (0): Screen open all day until Monday 01:00
-  // Screen off only from 01:00 to 08:00 on Monday morning
-  if (currentDayOfWeek == 0) {
-    // Sunday: Screen is OPEN all day (no off period)
-    return false;
+  // Saturday (6) and Sunday (0): Screen off 01:00-13:00
+  if (currentDayOfWeek == 6 || currentDayOfWeek == 0) {
+    if (currentTimeInMinutes >= 60 && currentTimeInMinutes < 780) {
+      return true;
+    }
   }
 
   return false;
@@ -226,25 +204,29 @@ bool handleGoodnightSequence() {
     unsigned long elapsed = millis() - goodnightPhaseStart;
     
     if (goodnightPhase == 1) {
-      // Phase 1: Show "İyi Geceler" for 5 seconds
-      if (elapsed < 5000) {
+      // Phase 1: Show "İyi Geceler" for 50 seconds with blink effect
+      if (elapsed < 50000) {
         display.clearDisplay();
         display.setTextColor(DISPLAY_WHITE);
-        
-        // Draw "İyi Geceler" centered
-        display.setTextSize(2);
-        const char* text = "Iyi Geceler";
-        int16_t x1, y1;
-        uint16_t w, h;
-        display.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
-        display.setCursor((SCREEN_WIDTH - w) / 2, 20);
-        display.print(text);
-        
-        // Draw moon icon
-        display.setTextSize(1);
-        display.setCursor(10, 8);
-        display.print("C"); // Moon character
-        
+
+        // Blink: 2s on, 1s off cycle
+        bool showText = ((elapsed % 3000) < 2000);
+
+        if (showText) {
+          // Draw "İyi Geceler" centered
+          display.setTextSize(2);
+          const char* text = "Iyi Geceler";
+          int16_t x1, y1;
+          uint16_t w, h;
+          display.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+          display.setCursor((SCREEN_WIDTH - w) / 2, 20);
+          display.print(text);
+
+          // Draw moon crescent
+          display.fillCircle(64, 8, 5, DISPLAY_WHITE);
+          display.fillCircle(67, 6, 4, DISPLAY_BLACK);
+        }
+
         display.display();
         return true; // Still running
       } else {
