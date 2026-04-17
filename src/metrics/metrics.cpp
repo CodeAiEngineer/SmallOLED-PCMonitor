@@ -262,7 +262,7 @@ void displayStats() {
 #define OVERLOAD_THRESHOLD 98
 #define OVERLOAD_INVERT_MS 1000UL
 #define OVERLOAD_TOTAL_MS 4000UL
-#define OVERLOAD_COOLDOWN_MS 30000UL
+#define OVERLOAD_COOLDOWN_MS 15000UL
 
 static bool overloadActive = false;
 static unsigned long overloadStart = 0;
