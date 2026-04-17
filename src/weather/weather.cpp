@@ -312,12 +312,8 @@ void drawWeather() {
     return;
   }
 
-  // Brief 100ms invert flash for attention, then normal (avoid eye strain)
-  if (elapsed < 100) {
-    display.invertDisplay(true);
-  } else {
-    display.invertDisplay(false);
-  }
+  // Always normal colors (no invert flash — user finds it eye-straining)
+  display.invertDisplay(false);
 
   display.clearDisplay();
   display.setTextColor(DISPLAY_WHITE);

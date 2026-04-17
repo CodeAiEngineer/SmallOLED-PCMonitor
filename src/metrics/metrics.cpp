@@ -259,8 +259,7 @@ void displayStats() {
 
 // ========== Overload Alert ==========
 
-#define OVERLOAD_THRESHOLD 98
-#define OVERLOAD_INVERT_MS 1000UL
+#define OVERLOAD_THRESHOLD 99
 #define OVERLOAD_TOTAL_MS 8000UL
 #define OVERLOAD_BLINK_PERIOD_MS 500UL
 #define OVERLOAD_COOLDOWN_MS 15000UL
@@ -317,15 +316,12 @@ bool checkOverloadAlert() {
 
 void drawOverloadAlert() {
   unsigned long elapsed = millis() - overloadStart;
-  bool invertPhase = elapsed < OVERLOAD_INVERT_MS;
-  display.invertDisplay(invertPhase);
+  // No invert — user finds it eye-straining; only blink in normal colors
+  display.invertDisplay(false);
 
   display.clearDisplay();
 
-  // Always visible during invert phase; blink during normal phase
-  bool textVisible = invertPhase ||
-    (((elapsed - OVERLOAD_INVERT_MS) / OVERLOAD_BLINK_PERIOD_MS) % 2 == 0);
-
+  bool textVisible = (elapsed / OVERLOAD_BLINK_PERIOD_MS) % 2 == 0;
   if (!textVisible) return;
 
   display.setTextColor(DISPLAY_WHITE);
