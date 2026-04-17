@@ -12,8 +12,8 @@
 #include <HTTPClient.h>
 #include <WiFi.h>
 
-// 90s cycle: display(10s) + wait(80s), alternating weather/clock
-#define WEATHER_UPDATE_INTERVAL 80000    // Wait after display phase
+// 240s cycle: display(10s) + wait(230s), alternating weather/clock
+#define WEATHER_UPDATE_INTERVAL 230000   // Wait after display phase
 #define WEATHER_DISPLAY_DURATION 10000   // Weather display duration (10 seconds)
 #define CLOCK_OVERLAY_DURATION 10000     // Fullscreen clock duration (10 seconds)
 

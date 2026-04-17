@@ -173,7 +173,7 @@ void updateWeather() {
       }
       break;
 
-    case 3: // WAIT - Wait 80s before next cycle (90s total - 10s display)
+    case 3: // WAIT - Wait 230s before next cycle (240s total - 10s display)
       if (now - stateStartTime >= WEATHER_UPDATE_INTERVAL) {
         weatherState = 0;
         Serial.println("Cycle: Ready for next display");
