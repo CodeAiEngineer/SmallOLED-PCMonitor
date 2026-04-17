@@ -73,6 +73,8 @@ void displayStats();
 void displayStatsCompactGrid();
 void displayMetricCompact(Metric *m);
 void drawProgressBar(int x, int y, int width, Metric *m);
+bool checkOverloadAlert();
+void drawOverloadAlert();
 int getOptimalRefreshRate();
 bool allSpaceFragmentsInactive(); // Required if not in clocks.h
 
@@ -462,8 +464,12 @@ void loop() {
         bool showStats = metricData.online;
   #endif
 
+        // Overload alert takes priority over normal stats screen
+        if (showStats && checkOverloadAlert()) {
+          drawOverloadAlert();
+        }
         // Show error status if PC is connected but LHM has issues
-        if (showStats && metricData.status != STATUS_OK && metricData.status != 0) {
+        else if (showStats && metricData.status != STATUS_OK && metricData.status != 0) {
           displayErrorStatus(metricData.status);
         } else if (showStats) {
           displayStats();

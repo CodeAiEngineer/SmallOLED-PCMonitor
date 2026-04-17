@@ -256,3 +256,86 @@ void drawProgressBar(int x, int y, int width, Metric* m) {
 void displayStats() {
   displayStatsCompactGrid();   // Compact 2-column grid layout
 }
+
+// ========== Overload Alert ==========
+
+#define OVERLOAD_THRESHOLD 98
+#define OVERLOAD_INVERT_MS 1000UL
+#define OVERLOAD_TOTAL_MS 4000UL
+#define OVERLOAD_COOLDOWN_MS 30000UL
+
+static bool overloadActive = false;
+static unsigned long overloadStart = 0;
+static char overloadLabel[METRIC_NAME_LEN];
+static int overloadValue = 0;
+static char overloadUnit[METRIC_UNIT_LEN];
+static unsigned long lastOverloadTrigger[MAX_METRICS + 1] = {0};
+
+bool checkOverloadAlert() {
+  unsigned long now = millis();
+
+  if (overloadActive) {
+    if (now - overloadStart >= OVERLOAD_TOTAL_MS) {
+      overloadActive = false;
+      display.invertDisplay(false);
+      return false;
+    }
+    return true;
+  }
+
+  if (!metricData.online) return false;
+
+  for (int i = 0; i < metricData.count; i++) {
+    Metric& m = metricData.metrics[i];
+    if (m.position == 255) continue;
+    // Only %-based metrics trigger overload (DL/UL use KB/s with no fixed max)
+    if (strcmp(m.unit, "%") != 0) continue;
+    if (m.value < OVERLOAD_THRESHOLD) continue;
+
+    uint8_t id = m.id;
+    if (id <= MAX_METRICS && lastOverloadTrigger[id] != 0 &&
+        now - lastOverloadTrigger[id] < OVERLOAD_COOLDOWN_MS) continue;
+
+    overloadActive = true;
+    overloadStart = now;
+    overloadValue = m.value;
+    strncpy(overloadLabel, m.label, METRIC_NAME_LEN - 1);
+    overloadLabel[METRIC_NAME_LEN - 1] = '\0';
+    convertCaretToSpaces(overloadLabel);
+    int len = strlen(overloadLabel);
+    while (len > 0 && (overloadLabel[len - 1] == ' ' || overloadLabel[len - 1] == '%')) {
+      overloadLabel[--len] = '\0';
+    }
+    strncpy(overloadUnit, m.unit, METRIC_UNIT_LEN - 1);
+    overloadUnit[METRIC_UNIT_LEN - 1] = '\0';
+    if (id <= MAX_METRICS) lastOverloadTrigger[id] = now;
+    return true;
+  }
+  return false;
+}
+
+void drawOverloadAlert() {
+  unsigned long elapsed = millis() - overloadStart;
+  display.invertDisplay(elapsed < OVERLOAD_INVERT_MS);
+
+  display.clearDisplay();
+  display.setTextColor(DISPLAY_WHITE);
+
+  int16_t x1, y1; uint16_t w, h;
+
+  display.setTextSize(2);
+  display.getTextBounds(overloadLabel, 0, 0, &x1, &y1, &w, &h);
+  int lx = (SCREEN_WIDTH - (int)w) / 2;
+  if (lx < 0) lx = 0;
+  display.setCursor(lx, 6);
+  display.print(overloadLabel);
+
+  char vbuf[16];
+  snprintf(vbuf, sizeof(vbuf), "%d%s", overloadValue, overloadUnit);
+  display.setTextSize(3);
+  display.getTextBounds(vbuf, 0, 0, &x1, &y1, &w, &h);
+  int vx = (SCREEN_WIDTH - (int)w) / 2;
+  if (vx < 0) vx = 0;
+  display.setCursor(vx, 32);
+  display.print(vbuf);
+}

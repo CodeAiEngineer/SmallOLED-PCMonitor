@@ -23,4 +23,10 @@ void displayMetricCompact(Metric* m);
 // Draw progress bar for a metric
 void drawProgressBar(int x, int y, int width, Metric* m);
 
+// Overload alert: detects any visible % metric >=98 and shows a fullscreen
+// alert (1s inverted + 3s normal = 4s total) with label and value.
+// Returns true while an alert is active and should be drawn.
+bool checkOverloadAlert();
+void drawOverloadAlert();
+
 #endif // METRICS_H
