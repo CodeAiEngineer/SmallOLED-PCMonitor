@@ -312,12 +312,11 @@ void drawWeather() {
     return;
   }
 
-  // First 2 seconds: flash by toggling invert every 500ms
-  if (elapsed < 2000) {
-    bool inv = ((elapsed / 500) % 2) == 0;
-    display.invertDisplay(inv);
-  } else {
+  // Brief 100ms invert flash for attention, then normal (avoid eye strain)
+  if (elapsed < 100) {
     display.invertDisplay(true);
+  } else {
+    display.invertDisplay(false);
   }
 
   display.clearDisplay();
